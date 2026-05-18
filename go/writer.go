@@ -24,13 +24,13 @@ type Writer struct {
 	idToMessageIndexes map[uint16][]*MessageIndex
 
 	// Topic-level state.
-	lastTimestamp uint64
+	lastTimestamp int64
 	isTopicOpen   bool
 	writerConfig  *WriterConfig
 	indexChunks   []*IndexChunk
 
 	// File-level state.
-	offset          uint64
+	offset          int64
 	currentTopicId  uint16
 	footer          *Footer
 	summary         *Summary
@@ -50,6 +50,7 @@ func NewWriter(w io.Writer) *Writer {
 		compressBuf: &ReusableBuffer{
 			Data: make([]byte, 0),
 		},
+		idToMessageIndexes: make(map[uint16][]*MessageIndex),
 	}
 }
 
@@ -83,6 +84,7 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 		}
 
 		namesToIds[names[i]] = w.currentTopicId
+		w.idToMessageIndexes[w.currentTopicId] = []*MessageIndex{}
 	}
 
 	w.summary.TopicsInfos = append(w.summary.TopicsInfos, &TopicsInfo{
@@ -118,7 +120,7 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 	return nil
 }
 
-func (w *Writer) WriteMessage(topicName string, message []byte, timestamp uint64) error {
+func (w *Writer) WriteMessage(topicName string, message []byte, timestamp int64) error {
 	if timestamp < w.lastTimestamp {
 		return fmt.Errorf("timestamp cannot decrease, current: %d < last: %d", timestamp, w.lastTimestamp)
 	}
@@ -131,14 +133,14 @@ func (w *Writer) WriteMessage(topicName string, message []byte, timestamp uint64
 	w.lastTimestamp = timestamp
 	w.idToMessageIndexes[id] = append(w.idToMessageIndexes[id], &MessageIndex{
 		Timestamp:     timestamp,
-		OffsetInChunk: uint64(w.buf.Len()),
+		OffsetInChunk: int64(w.buf.Len()),
 	})
 
 	w.buf.Write(message)
 
 	switch w.writerConfig.chunkConfig.Mode {
 	case ChunkThresholdModeSize:
-		w.chunkStatus.size += uint64(len(message))
+		w.chunkStatus.size += int64(len(message))
 	case ChunkThresholdModeDuration:
 		if w.chunkStatus.startTimestamp == 0 {
 			w.chunkStatus.startTimestamp = timestamp
@@ -182,7 +184,7 @@ func (w *Writer) CloseTopic() error {
 
 func (w *Writer) writeChunk() error {
 	var bytes []byte
-	uncompressedLen := uint64(w.buf.Len())
+	uncompressedLen := int64(w.buf.Len())
 	if w.writerConfig.isCompressed {
 		compressInto(w.buf.Bytes(), w.compressBuf)
 		bytes = w.compressBuf.Data
@@ -202,12 +204,13 @@ func (w *Writer) writeChunk() error {
 	w.indexChunks = append(w.indexChunks, &IndexChunk{
 		TopicIndexes:    topicIndexes,
 		ChunkOffset:     w.offset,
-		ChunkLen:        uint64(len(bytes)),
+		ChunkLen:        int64(len(bytes)),
 		UncompressedLen: uncompressedLen,
 	})
 
 	w.w.Write(bytes)
-	w.offset += uint64(len(bytes))
+	w.offset += int64(len(bytes))
+	fmt.Printf("wrote chunk: %d\n", w.offset)
 
 	w.chunkStatus.startTimestamp = 0
 	w.chunkStatus.size = 0
@@ -219,18 +222,20 @@ func (w *Writer) writeChunk() error {
 
 func (w *Writer) writeIndexChunks() error {
 	for i, indexChunks := range w.indexChunksList {
-		totalLen := uint64(0)
+		totalLen := int64(0)
 		for _, indexChunk := range indexChunks {
 			if err := WriteIndexChunk(w.buf, indexChunk); err != nil {
 				return err
 			}
+			Print(indexChunk)
 
 			compressInto(w.buf.Bytes(), w.compressBuf)
 			compressed := w.compressBuf.Data
+			fmt.Printf("before compress: %d, after compress: %d\n", w.buf.Len(), len(compressed))
 			w.buf.Reset()
 
-			startTimestamp := uint64(math.MaxUint64)
-			endTimestamp := uint64(0)
+			startTimestamp := int64(math.MaxInt64)
+			endTimestamp := int64(0)
 			for _, topicIndex := range indexChunk.TopicIndexes {
 				if topicIndex.MessageIndexes[0].Timestamp < startTimestamp {
 					startTimestamp = topicIndex.MessageIndexes[0].Timestamp
@@ -247,8 +252,9 @@ func (w *Writer) writeIndexChunks() error {
 			})
 
 			w.w.Write(compressed)
-			w.offset += uint64(len(compressed))
-			totalLen += uint64(len(compressed))
+			w.offset += int64(len(compressed))
+			totalLen += int64(len(compressed))
+			fmt.Printf("wrote index chunk: %d\n", w.offset)
 		}
 		w.summary.TopicsInfos[i].TotalLen = totalLen
 	}
@@ -261,11 +267,13 @@ func (w *Writer) writeSummary() error {
 	}
 	compressInto(w.buf.Bytes(), w.compressBuf)
 	compressed := w.compressBuf.Data
+	fmt.Printf("before compress: %d, after compress: %d\n", w.buf.Len(), len(compressed))
 	w.buf.Reset()
 
 	w.w.Write(compressed)
-	w.offset += uint64(len(compressed))
-	w.footer.SummaryLen = uint64(len(compressed))
+	w.offset += int64(len(compressed))
+	w.footer.SummaryLen = int64(len(compressed))
+	fmt.Printf("wrote summary: %d\n", w.offset)
 	return nil
 }
 

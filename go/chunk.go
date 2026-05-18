@@ -13,13 +13,13 @@ const (
 
 type ChunkConfig struct {
 	Mode     ChunkThresholdMode
-	Size     uint64
-	Duration uint64
+	Size     int64
+	Duration int64
 	Count    uint32
 }
 
 type ChunkStatus struct {
-	startTimestamp uint64
-	size           uint64
+	startTimestamp int64
+	size           int64
 	count          uint32
 }

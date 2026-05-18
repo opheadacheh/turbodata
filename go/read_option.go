@@ -16,14 +16,14 @@ func WithTopicNames(names []string) ReadOption {
 	}
 }
 
-func WithStartTimestamp(timestamp uint64) ReadOption {
+func WithStartTimestamp(timestamp int64) ReadOption {
 	return func(it *MessageIterator) error {
 		it.startTimestamp = timestamp
 		return nil
 	}
 }
 
-func WithEndTimestamp(timestamp uint64) ReadOption {
+func WithEndTimestamp(timestamp int64) ReadOption {
 	return func(it *MessageIterator) error {
 		it.endTimestamp = timestamp
 		return nil

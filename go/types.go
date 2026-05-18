@@ -9,7 +9,7 @@ const (
 )
 
 type Footer struct {
-	SummaryLen uint64
+	SummaryLen int64
 	Magic      [5]byte
 }
 
@@ -20,7 +20,7 @@ type Summary struct {
 type TopicsInfo struct {
 	TopicMetadatas     []*TopicMetadata
 	IndexChunkInfoList []*IndexChunkInfo
-	TotalLen           uint64
+	TotalLen           int64
 }
 
 type TopicMetadata struct {
@@ -30,16 +30,16 @@ type TopicMetadata struct {
 }
 
 type IndexChunkInfo struct {
-	StartTimestamp uint64
-	EndTimestamp   uint64
-	Offset         uint64
+	StartTimestamp int64
+	EndTimestamp   int64
+	Offset         int64
 }
 
 type IndexChunk struct {
 	TopicIndexes    []*TopicIndex
-	ChunkOffset     uint64
-	ChunkLen        uint64
-	UncompressedLen uint64
+	ChunkOffset     int64
+	ChunkLen        int64
+	UncompressedLen int64
 }
 
 type TopicIndex struct {
@@ -49,6 +49,6 @@ type TopicIndex struct {
 }
 
 type MessageIndex struct {
-	Timestamp     uint64
-	OffsetInChunk uint64
+	Timestamp     int64
+	OffsetInChunk int64
 }

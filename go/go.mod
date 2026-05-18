@@ -3,6 +3,7 @@ module turbodata
 go 1.26.1
 
 require (
+	github.com/google/go-cmp v0.7.0
 	github.com/klauspost/compress v1.18.6
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 )
