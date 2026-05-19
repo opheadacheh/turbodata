@@ -2,411 +2,569 @@ package turbodata
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
+	"io"
+	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
-var (
-	testTopicMetadata1 = &TopicMetadata{
-		Id:       1,
-		Name:     "test",
-		Metadata: map[string]any{"foo": "bar"},
-	}
-	testTopicMetadata2 = &TopicMetadata{
-		Id:       2,
-		Name:     "test2",
-		Metadata: map[string]any{"foo": "bar"},
-	}
-
-	testIndexChunkInfo1 = &IndexChunkInfo{
-		StartTimestamp: 1,
-		EndTimestamp:   2,
-		Offset:         3,
-	}
-	testIndexChunkInfo2 = &IndexChunkInfo{
-		StartTimestamp: 4,
-		EndTimestamp:   5,
-		Offset:         6,
-	}
-
-	testTopicsInfo1 = &TopicsInfo{
-		TopicMetadatas:     []*TopicMetadata{testTopicMetadata1, testTopicMetadata2},
-		IndexChunkInfoList: []*IndexChunkInfo{testIndexChunkInfo1, testIndexChunkInfo2},
-		TotalLen:           100,
-	}
-	testTopicsInfo2 = &TopicsInfo{
-		TopicMetadatas:     []*TopicMetadata{testTopicMetadata1, testTopicMetadata2},
-		IndexChunkInfoList: []*IndexChunkInfo{testIndexChunkInfo1, testIndexChunkInfo2},
-		TotalLen:           100,
-	}
-
-	testSummary = &Summary{
-		TopicsInfos: []*TopicsInfo{testTopicsInfo1, testTopicsInfo2},
-	}
-
-	testMessageIndex1 = &MessageIndex{
-		Timestamp:     1,
-		OffsetInChunk: 2,
-	}
-	testMessageIndex2 = &MessageIndex{
-		Timestamp:     3,
-		OffsetInChunk: 4,
-	}
-
-	testTopicIndex1 = &TopicIndex{
-		Id:              1,
-		MessageIndexes:  []*MessageIndex{testMessageIndex1, testMessageIndex2},
-		KeyFrameIndexes: []uint32{1, 2},
-	}
-	testTopicIndex2 = &TopicIndex{
-		Id:              2,
-		MessageIndexes:  []*MessageIndex{testMessageIndex1, testMessageIndex2},
-		KeyFrameIndexes: []uint32{1, 2},
-	}
-
-	testIndexChunk = &IndexChunk{
-		TopicIndexes:    []*TopicIndex{testTopicIndex1, testTopicIndex2},
-		ChunkOffset:     1,
-		ChunkLen:        2,
-		UncompressedLen: 3,
-	}
-)
-
-func TestWriteReadString(t *testing.T) {
-	str := "hello"
-	buf := bytes.NewBuffer(nil)
-	err := writeString(buf, str)
-	if err != nil {
-		t.Fatalf("failed to write string: %v", err)
-	}
-
-	if buf.Len() != 9 {
-		t.Fatalf("string length mismatch: expected %d, got %d", 9, buf.Len())
-	}
-
-	readStr, err := readString(buf)
-	if err != nil {
-		t.Fatalf("failed to read string: %v", err)
-	}
-
-	if readStr != str {
-		t.Fatalf("string mismatch: expected %s, got %s", str, readStr)
-	}
+// oversizedReader returns a reader whose only content is a uint32 big-endian
+// length prefix with no following body, used to trigger length-limit errors.
+func oversizedReader(length uint32) io.Reader {
+	buf := &bytes.Buffer{}
+	binary.Write(buf, binary.BigEndian, length)
+	return buf
 }
 
-func TestWriteReadMap(t *testing.T) {
-	mp := map[string]any{
-		"hello": "world",
-		"foo":   123,
-	}
-	buf := bytes.NewBuffer(nil)
-	err := writeMap(buf, mp)
-	if err != nil {
-		t.Fatalf("failed to write map: %v", err)
-	}
+// TestString covers readString / writeString.
+func TestString(t *testing.T) {
+	t.Run("roundtrip", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			s    string
+		}{
+			{"empty", ""},
+			{"ascii", "hello world"},
+			{"unicode", "こんにちは世界"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				buf := &bytes.Buffer{}
+				if err := writeString(buf, tc.s); err != nil {
+					t.Errorf("writeString(%q): %v", tc.s, err)
+					return
+				}
+				got, err := readString(buf)
+				if err != nil {
+					t.Errorf("readString: %v", err)
+					return
+				}
+				if diff := cmp.Diff(tc.s, got); diff != "" {
+					t.Errorf("mismatch (-want +got):\n%s", diff)
+				}
+			})
+		}
+	})
 
-	if buf.Len() != 22 {
-		t.Fatalf("map length mismatch: expected %d, got %d", 22, buf.Len())
-	}
+	t.Run("oversized", func(t *testing.T) {
+		_, err := readString(oversizedReader(maxStringLen + 1))
+		if err == nil {
+			t.Errorf("expected error for oversized string length, got nil")
+		} else if !strings.Contains(err.Error(), "exceeds maximum") {
+			t.Errorf("error %q should mention \"exceeds maximum\"", err)
+		}
+	})
 
-	readMap, err := readMap(buf)
-	if err != nil {
-		t.Fatalf("failed to read map: %v", err)
-	}
+	t.Run("truncated_len", func(t *testing.T) {
+		_, err := readString(bytes.NewReader([]byte{}))
+		if err == nil {
+			t.Errorf("expected error reading length prefix from empty reader, got nil")
+		} else if !errors.Is(err, io.EOF) {
+			t.Errorf("expected io.EOF, got %v", err)
+		}
+	})
 
-	if readMap["hello"].(string) != "world" {
-		t.Fatalf("map mismatch: expected %s, got %s", "world", readMap["hello"])
-	}
-
-	if readMap["foo"].(int8) != 123 {
-		t.Fatalf("map mismatch: expected %d, got %d", 123, readMap["foo"])
-	}
+	t.Run("truncated_body", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		binary.Write(buf, binary.BigEndian, uint32(5))
+		buf.Write([]byte{0x01, 0x02}) // only 2 bytes; length says 5
+		_, err := readString(buf)
+		if err == nil {
+			t.Errorf("expected error for truncated body, got nil")
+		} else if !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Errorf("expected io.ErrUnexpectedEOF, got %v", err)
+		}
+	})
 }
 
-func TestWriteReadFooter(t *testing.T) {
+// TestMap covers readMap / writeMap.
+func TestMap(t *testing.T) {
+	t.Run("roundtrip", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			m    map[string]any
+		}{
+			{"empty", map[string]any{}},
+			{"string_value", map[string]any{"key": "value"}},
+			{"int_value", map[string]any{"num": int8(42)}},
+			{"mixed", map[string]any{"hello": "world", "foo": int8(123)}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				buf := &bytes.Buffer{}
+				if err := writeMap(buf, tc.m); err != nil {
+					t.Errorf("writeMap: %v", err)
+					return
+				}
+				got, err := readMap(buf)
+				if err != nil {
+					t.Errorf("readMap: %v", err)
+					return
+				}
+				if diff := cmp.Diff(tc.m, got); diff != "" {
+					t.Errorf("mismatch (-want +got):\n%s", diff)
+				}
+			})
+		}
+	})
+
+	t.Run("oversized", func(t *testing.T) {
+		_, err := readMap(oversizedReader(maxMapLen + 1))
+		if err == nil {
+			t.Errorf("expected error for oversized map length, got nil")
+		} else if !strings.Contains(err.Error(), "exceeds maximum") {
+			t.Errorf("error %q should mention \"exceeds maximum\"", err)
+		}
+	})
+
+	t.Run("truncated_len", func(t *testing.T) {
+		_, err := readMap(bytes.NewReader([]byte{}))
+		if err == nil {
+			t.Errorf("expected error reading length prefix from empty reader, got nil")
+		} else if !errors.Is(err, io.EOF) {
+			t.Errorf("expected io.EOF, got %v", err)
+		}
+	})
+
+	t.Run("truncated_body", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		binary.Write(buf, binary.BigEndian, uint32(10))
+		buf.Write([]byte{0x01, 0x02}) // only 2 bytes; length says 10
+		_, err := readMap(buf)
+		if err == nil {
+			t.Errorf("expected error for truncated body, got nil")
+		} else if !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Errorf("expected io.ErrUnexpectedEOF, got %v", err)
+		}
+	})
+
+	t.Run("invalid_msgpack", func(t *testing.T) {
+		// 0xc1 is the "never used" format byte in msgpack — any conforming
+		// implementation must reject it.
+		invalid := []byte{0xc1}
+		buf := &bytes.Buffer{}
+		binary.Write(buf, binary.BigEndian, uint32(len(invalid)))
+		buf.Write(invalid)
+		_, err := readMap(buf)
+		if err == nil {
+			t.Errorf("expected unmarshal error for invalid msgpack bytes, got nil")
+		} else if !strings.Contains(err.Error(), "msgpack") {
+			t.Errorf("error %q should mention \"msgpack\"", err)
+		}
+	})
+}
+
+// TestFooter covers ReadFooter / WriteFooter.
+func TestFooter(t *testing.T) {
 	footer := &Footer{
 		SummaryLen: 100,
 		Magic:      [5]byte{'7', 'U', 'R', 'B', '0'},
 	}
 
-	buf := bytes.NewBuffer(nil)
-	err := WriteFooter(buf, footer)
-	if err != nil {
-		t.Fatalf("failed to write footer: %v", err)
-	}
+	t.Run("roundtrip", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		if err := WriteFooter(buf, footer); err != nil {
+			t.Errorf("WriteFooter: %v", err)
+			return
+		}
+		got, err := ReadFooter(buf)
+		if err != nil {
+			t.Errorf("ReadFooter: %v", err)
+			return
+		}
+		if diff := cmp.Diff(footer, got); diff != "" {
+			t.Errorf("mismatch (-want +got):\n%s", diff)
+		}
+	})
 
-	if buf.Len() != 13 {
-		t.Fatalf("footer length mismatch: expected %d, got %d", 13, buf.Len())
-	}
+	t.Run("binary_size", func(t *testing.T) {
+		// int64 (8 bytes) + [5]byte (5 bytes) = 13 bytes
+		buf := &bytes.Buffer{}
+		if err := WriteFooter(buf, footer); err != nil {
+			t.Errorf("WriteFooter: %v", err)
+			return
+		}
+		if buf.Len() != 13 {
+			t.Errorf("binary size: got %d, want 13", buf.Len())
+		}
+	})
 
-	readFooter, err := ReadFooter(buf)
-	if err != nil {
-		t.Fatalf("failed to read footer: %v", err)
-	}
-
-	if readFooter.SummaryLen != footer.SummaryLen {
-		t.Fatalf("summary len mismatch: expected %d, got %d", footer.SummaryLen, readFooter.SummaryLen)
-	}
-
-	if readFooter.Magic != footer.Magic {
-		t.Fatalf("Magic mismatch: expected %v, got %v", footer.Magic, readFooter.Magic)
-	}
+	t.Run("truncated", func(t *testing.T) {
+		_, err := ReadFooter(bytes.NewReader([]byte{}))
+		if err == nil {
+			t.Errorf("expected error for empty reader, got nil")
+		} else if !errors.Is(err, io.EOF) {
+			t.Errorf("expected io.EOF, got %v", err)
+		}
+	})
 }
 
-func TestWriteReadTopicMetadata(t *testing.T) {
-	buf := bytes.NewBuffer(nil)
-	err := WriteTopicMetadata(buf, testTopicMetadata1)
-	if err != nil {
-		t.Fatalf("failed to write topic Metadata: %v", err)
-	}
+// TestTopicMetadata covers ReadTopicMetadata / WriteTopicMetadata.
+func TestTopicMetadata(t *testing.T) {
+	t.Run("roundtrip", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			tm   *TopicMetadata
+		}{
+			{"populated", &TopicMetadata{Id: 42, Name: "camera/front", Metadata: map[string]any{"encoding": "jpeg"}}},
+			{"empty_name_and_metadata", &TopicMetadata{Id: 1, Name: "", Metadata: map[string]any{}}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				buf := &bytes.Buffer{}
+				if err := WriteTopicMetadata(buf, tc.tm); err != nil {
+					t.Errorf("WriteTopicMetadata: %v", err)
+					return
+				}
+				got, err := ReadTopicMetadata(buf)
+				if err != nil {
+					t.Errorf("ReadTopicMetadata: %v", err)
+					return
+				}
+				if diff := cmp.Diff(tc.tm, got); diff != "" {
+					t.Errorf("mismatch (-want +got):\n%s", diff)
+				}
+			})
+		}
+	})
 
-	readTopicMetadata, err := ReadTopicMetadata(buf)
-	if err != nil {
-		t.Fatalf("failed to read topic Metadata: %v", err)
-	}
-
-	if readTopicMetadata.Id != testTopicMetadata1.Id {
-		t.Fatalf("Id mismatch: expected %d, got %d", testTopicMetadata1.Id, readTopicMetadata.Id)
-	}
-
-	if readTopicMetadata.Name != testTopicMetadata1.Name {
-		t.Fatalf("Name mismatch: expected %s, got %s", testTopicMetadata1.Name, readTopicMetadata.Name)
-	}
-
-	if readTopicMetadata.Metadata["foo"].(string) != "bar" {
-		t.Fatalf("Metadata mismatch: expected %s, got %s", "bar", readTopicMetadata.Metadata["foo"])
-	}
+	t.Run("truncated", func(t *testing.T) {
+		_, err := ReadTopicMetadata(bytes.NewReader([]byte{}))
+		if err == nil {
+			t.Errorf("expected error for empty reader, got nil")
+		} else if !errors.Is(err, io.EOF) {
+			t.Errorf("expected io.EOF, got %v", err)
+		}
+	})
 }
 
-func TestWriteReadIndexChunkInfo(t *testing.T) {
-	buf := bytes.NewBuffer(nil)
-	err := WriteIndexChunkInfo(buf, testIndexChunkInfo1)
-	if err != nil {
-		t.Fatalf("failed to write index chunk info: %v", err)
-	}
+// TestIndexChunkInfo covers ReadIndexChunkInfo / WriteIndexChunkInfo.
+func TestIndexChunkInfo(t *testing.T) {
+	info := &IndexChunkInfo{StartTimestamp: 100, EndTimestamp: 200, Offset: 300}
 
-	readIndexChunkInfo, err := ReadIndexChunkInfo(buf)
-	if err != nil {
-		t.Fatalf("failed to read index chunk info: %v", err)
-	}
+	t.Run("roundtrip", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		if err := WriteIndexChunkInfo(buf, info); err != nil {
+			t.Errorf("WriteIndexChunkInfo: %v", err)
+			return
+		}
+		got, err := ReadIndexChunkInfo(buf)
+		if err != nil {
+			t.Errorf("ReadIndexChunkInfo: %v", err)
+			return
+		}
+		if diff := cmp.Diff(info, got); diff != "" {
+			t.Errorf("mismatch (-want +got):\n%s", diff)
+		}
+	})
 
-	if readIndexChunkInfo.StartTimestamp != testIndexChunkInfo1.StartTimestamp {
-		t.Fatalf("start timestamp mismatch: expected %d, got %d", testIndexChunkInfo1.StartTimestamp, readIndexChunkInfo.StartTimestamp)
-	}
+	t.Run("binary_size", func(t *testing.T) {
+		// 3 × int64 = 24 bytes
+		buf := &bytes.Buffer{}
+		if err := WriteIndexChunkInfo(buf, info); err != nil {
+			t.Errorf("WriteIndexChunkInfo: %v", err)
+			return
+		}
+		if buf.Len() != 24 {
+			t.Errorf("binary size: got %d, want 24", buf.Len())
+		}
+	})
 
-	if readIndexChunkInfo.EndTimestamp != testIndexChunkInfo1.EndTimestamp {
-		t.Fatalf("end timestamp mismatch: expected %d, got %d", testIndexChunkInfo1.EndTimestamp, readIndexChunkInfo.EndTimestamp)
-	}
-
-	if readIndexChunkInfo.Offset != testIndexChunkInfo1.Offset {
-		t.Fatalf("offset mismatch: expected %d, got %d", testIndexChunkInfo1.Offset, readIndexChunkInfo.Offset)
-	}
+	t.Run("truncated", func(t *testing.T) {
+		_, err := ReadIndexChunkInfo(bytes.NewReader([]byte{}))
+		if err == nil {
+			t.Errorf("expected error for empty reader, got nil")
+		} else if !errors.Is(err, io.EOF) {
+			t.Errorf("expected io.EOF, got %v", err)
+		}
+	})
 }
 
-func TestWriteReadTopicsInfo(t *testing.T) {
-	buf := bytes.NewBuffer(nil)
-	err := WriteTopicsInfo(buf, testTopicsInfo1)
-	if err != nil {
-		t.Fatalf("failed to write topics info: %v", err)
+// TestTopicsInfo covers ReadTopicsInfo / WriteTopicsInfo.
+func TestTopicsInfo(t *testing.T) {
+	populated := &TopicsInfo{
+		TopicMetadatas: []*TopicMetadata{
+			{Id: 1, Name: "topic1", Metadata: map[string]any{"a": "b"}},
+			{Id: 2, Name: "topic2", Metadata: map[string]any{"c": "d"}},
+		},
+		IndexChunkInfoList: []*IndexChunkInfo{
+			{StartTimestamp: 1, EndTimestamp: 2, Offset: 3},
+			{StartTimestamp: 4, EndTimestamp: 5, Offset: 6},
+		},
+		TotalLen: 1000,
 	}
 
-	readTopicsInfo, err := ReadTopicsInfo(buf)
-	if err != nil {
-		t.Fatalf("failed to read topics info: %v", err)
-	}
-
-	if len(readTopicsInfo.TopicMetadatas) != len(testTopicsInfo1.TopicMetadatas) {
-		t.Fatalf("topic metadatas length mismatch: expected %d, got %d", len(testTopicsInfo1.TopicMetadatas), len(readTopicsInfo.TopicMetadatas))
-	}
-
-	for i := range readTopicsInfo.TopicMetadatas {
-		if readTopicsInfo.TopicMetadatas[i].Id != testTopicsInfo1.TopicMetadatas[i].Id {
-			t.Fatalf("topic metadata id mismatch: expected %d, got %d", testTopicsInfo1.TopicMetadatas[i].Id, readTopicsInfo.TopicMetadatas[i].Id)
+	t.Run("roundtrip", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		if err := WriteTopicsInfo(buf, populated); err != nil {
+			t.Errorf("WriteTopicsInfo: %v", err)
+			return
 		}
-
-		if readTopicsInfo.TopicMetadatas[i].Name != testTopicsInfo1.TopicMetadatas[i].Name {
-			t.Fatalf("topic metadata name mismatch: expected %s, got %s", testTopicsInfo1.TopicMetadatas[i].Name, readTopicsInfo.TopicMetadatas[i].Name)
+		got, err := ReadTopicsInfo(buf)
+		if err != nil {
+			t.Errorf("ReadTopicsInfo: %v", err)
+			return
 		}
-
-		if readTopicsInfo.TopicMetadatas[i].Metadata["foo"].(string) != "bar" {
-			t.Fatalf("topic metadata metadata mismatch: expected %s, got %s", "bar", readTopicsInfo.TopicMetadatas[i].Metadata["foo"])
+		if diff := cmp.Diff(populated, got); diff != "" {
+			t.Errorf("mismatch (-want +got):\n%s", diff)
 		}
-	}
+	})
 
-	if len(readTopicsInfo.IndexChunkInfoList) != len(testTopicsInfo1.IndexChunkInfoList) {
-		t.Fatalf("index chunk info list length mismatch: expected %d, got %d", len(testTopicsInfo1.IndexChunkInfoList), len(readTopicsInfo.IndexChunkInfoList))
-	}
-
-	for i := range readTopicsInfo.IndexChunkInfoList {
-		if readTopicsInfo.IndexChunkInfoList[i].StartTimestamp != testTopicsInfo1.IndexChunkInfoList[i].StartTimestamp {
-			t.Fatalf("index chunk info start timestamp mismatch: expected %d, got %d", testTopicsInfo1.IndexChunkInfoList[i].StartTimestamp, readTopicsInfo.IndexChunkInfoList[i].StartTimestamp)
+	t.Run("empty", func(t *testing.T) {
+		empty := &TopicsInfo{
+			TopicMetadatas:     []*TopicMetadata{},
+			IndexChunkInfoList: []*IndexChunkInfo{},
+			TotalLen:           0,
 		}
-
-		if readTopicsInfo.IndexChunkInfoList[i].EndTimestamp != testTopicsInfo1.IndexChunkInfoList[i].EndTimestamp {
-			t.Fatalf("index chunk info end timestamp mismatch: expected %d, got %d", testTopicsInfo1.IndexChunkInfoList[i].EndTimestamp, readTopicsInfo.IndexChunkInfoList[i].EndTimestamp)
+		buf := &bytes.Buffer{}
+		if err := WriteTopicsInfo(buf, empty); err != nil {
+			t.Errorf("WriteTopicsInfo: %v", err)
+			return
 		}
-
-		if readTopicsInfo.IndexChunkInfoList[i].Offset != testTopicsInfo1.IndexChunkInfoList[i].Offset {
-			t.Fatalf("index chunk info offset mismatch: expected %d, got %d", testTopicsInfo1.IndexChunkInfoList[i].Offset, readTopicsInfo.IndexChunkInfoList[i].Offset)
+		got, err := ReadTopicsInfo(buf)
+		if err != nil {
+			t.Errorf("ReadTopicsInfo: %v", err)
+			return
 		}
-	}
+		if diff := cmp.Diff(empty, got); diff != "" {
+			t.Errorf("mismatch (-want +got):\n%s", diff)
+		}
+	})
 
-	if readTopicsInfo.TotalLen != testTopicsInfo1.TotalLen {
-		t.Fatalf("total len mismatch: expected %d, got %d", testTopicsInfo1.TotalLen, readTopicsInfo.TotalLen)
-	}
+	t.Run("truncated", func(t *testing.T) {
+		_, err := ReadTopicsInfo(bytes.NewReader([]byte{}))
+		if err == nil {
+			t.Errorf("expected error for empty reader, got nil")
+		} else if !errors.Is(err, io.EOF) {
+			t.Errorf("expected io.EOF, got %v", err)
+		}
+	})
 }
 
-func TestWriteReadSummary(t *testing.T) {
-	buf := bytes.NewBuffer(nil)
-	err := WriteSummary(buf, testSummary)
-	if err != nil {
-		t.Fatalf("failed to write summary: %v", err)
+// TestSummary covers ReadSummary / WriteSummary.
+func TestSummary(t *testing.T) {
+	populated := &Summary{
+		TopicsInfos: []*TopicsInfo{
+			{
+				TopicMetadatas:     []*TopicMetadata{{Id: 1, Name: "t1", Metadata: map[string]any{}}},
+				IndexChunkInfoList: []*IndexChunkInfo{{StartTimestamp: 0, EndTimestamp: 10, Offset: 5}},
+				TotalLen:           100,
+			},
+			{
+				TopicMetadatas:     []*TopicMetadata{{Id: 2, Name: "t2", Metadata: map[string]any{}}},
+				IndexChunkInfoList: []*IndexChunkInfo{{StartTimestamp: 10, EndTimestamp: 20, Offset: 15}},
+				TotalLen:           200,
+			},
+		},
 	}
 
-	readSummary, err := ReadSummary(buf)
-	if err != nil {
-		t.Fatalf("failed to read summary: %v", err)
-	}
-
-	if len(readSummary.TopicsInfos) != len(testSummary.TopicsInfos) {
-		t.Fatalf("topics infos length mismatch: expected %d, got %d", len(testSummary.TopicsInfos), len(readSummary.TopicsInfos))
-	}
-
-	for i := range readSummary.TopicsInfos {
-		for j := range readSummary.TopicsInfos[i].TopicMetadatas {
-			if readSummary.TopicsInfos[i].TopicMetadatas[j].Id != testSummary.TopicsInfos[i].TopicMetadatas[j].Id {
-				t.Fatalf("topic metadata id mismatch: expected %d, got %d", testSummary.TopicsInfos[i].TopicMetadatas[j].Id, readSummary.TopicsInfos[i].TopicMetadatas[j].Id)
-			}
-
-			if readSummary.TopicsInfos[i].TopicMetadatas[j].Name != testSummary.TopicsInfos[i].TopicMetadatas[j].Name {
-				t.Fatalf("topic metadata name mismatch: expected %s, got %s", testSummary.TopicsInfos[i].TopicMetadatas[j].Name, readSummary.TopicsInfos[i].TopicMetadatas[j].Name)
-			}
-
-			if readSummary.TopicsInfos[i].TopicMetadatas[j].Metadata["foo"].(string) != "bar" {
-				t.Fatalf("topic metadata metadata mismatch: expected %s, got %s", "bar", readSummary.TopicsInfos[i].TopicMetadatas[j].Metadata["foo"])
-			}
+	t.Run("roundtrip", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		if err := WriteSummary(buf, populated); err != nil {
+			t.Errorf("WriteSummary: %v", err)
+			return
 		}
-
-		if len(readSummary.TopicsInfos[i].IndexChunkInfoList) != len(testSummary.TopicsInfos[i].IndexChunkInfoList) {
-			t.Fatalf("index chunk info list length mismatch: expected %d, got %d", len(testSummary.TopicsInfos[i].IndexChunkInfoList), len(readSummary.TopicsInfos[i].IndexChunkInfoList))
+		got, err := ReadSummary(buf)
+		if err != nil {
+			t.Errorf("ReadSummary: %v", err)
+			return
 		}
-
-		for j := range readSummary.TopicsInfos[i].IndexChunkInfoList {
-			if readSummary.TopicsInfos[i].IndexChunkInfoList[j].StartTimestamp != testSummary.TopicsInfos[i].IndexChunkInfoList[j].StartTimestamp {
-				t.Fatalf("index chunk info start timestamp mismatch: expected %d, got %d", testSummary.TopicsInfos[i].IndexChunkInfoList[j].StartTimestamp, readSummary.TopicsInfos[i].IndexChunkInfoList[j].StartTimestamp)
-			}
-
-			if readSummary.TopicsInfos[i].IndexChunkInfoList[j].EndTimestamp != testSummary.TopicsInfos[i].IndexChunkInfoList[j].EndTimestamp {
-				t.Fatalf("index chunk info end timestamp mismatch: expected %d, got %d", testSummary.TopicsInfos[i].IndexChunkInfoList[j].EndTimestamp, readSummary.TopicsInfos[i].IndexChunkInfoList[j].EndTimestamp)
-			}
-
-			if readSummary.TopicsInfos[i].IndexChunkInfoList[j].Offset != testSummary.TopicsInfos[i].IndexChunkInfoList[j].Offset {
-				t.Fatalf("index chunk info offset mismatch: expected %d, got %d", testSummary.TopicsInfos[i].IndexChunkInfoList[j].Offset, readSummary.TopicsInfos[i].IndexChunkInfoList[j].Offset)
-			}
+		if diff := cmp.Diff(populated, got); diff != "" {
+			t.Errorf("mismatch (-want +got):\n%s", diff)
 		}
+	})
 
-		if readSummary.TopicsInfos[i].TotalLen != testSummary.TopicsInfos[i].TotalLen {
-			t.Fatalf("total len mismatch: expected %d, got %d", testSummary.TopicsInfos[i].TotalLen, readSummary.TopicsInfos[i].TotalLen)
+	t.Run("empty", func(t *testing.T) {
+		empty := &Summary{TopicsInfos: []*TopicsInfo{}}
+		buf := &bytes.Buffer{}
+		if err := WriteSummary(buf, empty); err != nil {
+			t.Errorf("WriteSummary: %v", err)
+			return
 		}
-	}
+		got, err := ReadSummary(buf)
+		if err != nil {
+			t.Errorf("ReadSummary: %v", err)
+			return
+		}
+		if diff := cmp.Diff(empty, got); diff != "" {
+			t.Errorf("mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("truncated", func(t *testing.T) {
+		_, err := ReadSummary(bytes.NewReader([]byte{}))
+		if err == nil {
+			t.Errorf("expected error for empty reader, got nil")
+		} else if !errors.Is(err, io.EOF) {
+			t.Errorf("expected io.EOF, got %v", err)
+		}
+	})
 }
 
-func TestWriteReadMessageIndex(t *testing.T) {
-	buf := bytes.NewBuffer(nil)
-	err := WriteMessageIndex(buf, testMessageIndex1)
-	if err != nil {
-		t.Fatalf("failed to write message index: %v", err)
-	}
+// TestMessageIndex covers ReadMessageIndex / WriteMessageIndex.
+func TestMessageIndex(t *testing.T) {
+	mi := &MessageIndex{Timestamp: 123456789, OffsetInChunk: 42}
 
-	if buf.Len() != 16 {
-		t.Fatalf("message index length mismatch: expected %d, got %d", 16, buf.Len())
-	}
+	t.Run("roundtrip", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		if err := WriteMessageIndex(buf, mi); err != nil {
+			t.Errorf("WriteMessageIndex: %v", err)
+			return
+		}
+		got, err := ReadMessageIndex(buf)
+		if err != nil {
+			t.Errorf("ReadMessageIndex: %v", err)
+			return
+		}
+		if diff := cmp.Diff(mi, got); diff != "" {
+			t.Errorf("mismatch (-want +got):\n%s", diff)
+		}
+	})
 
-	readMessageIndex, err := ReadMessageIndex(buf)
-	if err != nil {
-		t.Fatalf("failed to read message index: %v", err)
-	}
+	t.Run("binary_size", func(t *testing.T) {
+		// 2 × int64 = 16 bytes
+		buf := &bytes.Buffer{}
+		if err := WriteMessageIndex(buf, mi); err != nil {
+			t.Errorf("WriteMessageIndex: %v", err)
+			return
+		}
+		if buf.Len() != 16 {
+			t.Errorf("binary size: got %d, want 16", buf.Len())
+		}
+	})
 
-	if readMessageIndex.Timestamp != testMessageIndex1.Timestamp {
-		t.Fatalf("timestamp mismatch: expected %d, got %d", testMessageIndex1.Timestamp, readMessageIndex.Timestamp)
-	}
-
-	if readMessageIndex.OffsetInChunk != testMessageIndex1.OffsetInChunk {
-		t.Fatalf("offset in chunk mismatch: expected %d, got %d", testMessageIndex1.OffsetInChunk, readMessageIndex.OffsetInChunk)
-	}
+	t.Run("truncated", func(t *testing.T) {
+		_, err := ReadMessageIndex(bytes.NewReader([]byte{}))
+		if err == nil {
+			t.Errorf("expected error for empty reader, got nil")
+		} else if !errors.Is(err, io.EOF) {
+			t.Errorf("expected io.EOF, got %v", err)
+		}
+	})
 }
 
-func TestWriteReadTopicIndex(t *testing.T) {
-	buf := bytes.NewBuffer(nil)
-	err := WriteTopicIndex(buf, testTopicIndex1)
-	if err != nil {
-		t.Fatalf("failed to write topic index: %v", err)
+// TestTopicIndex covers ReadTopicIndex / WriteTopicIndex.
+func TestTopicIndex(t *testing.T) {
+	populated := &TopicIndex{
+		Id: 7,
+		MessageIndexes: []*MessageIndex{
+			{Timestamp: 1, OffsetInChunk: 10},
+			{Timestamp: 2, OffsetInChunk: 20},
+		},
+		KeyFrameIndexes: []uint32{0, 1, 5},
 	}
 
-	readTopicIndex, err := ReadTopicIndex(buf)
-	if err != nil {
-		t.Fatalf("failed to read topic index: %v", err)
-	}
-
-	if readTopicIndex.Id != testTopicIndex1.Id {
-		t.Fatalf("id mismatch: expected %d, got %d", testTopicIndex1.Id, readTopicIndex.Id)
-	}
-
-	if len(readTopicIndex.MessageIndexes) != len(testTopicIndex1.MessageIndexes) {
-		t.Fatalf("message indexes length mismatch: expected %d, got %d", len(testTopicIndex1.MessageIndexes), len(readTopicIndex.MessageIndexes))
-	}
-
-	for i := range readTopicIndex.MessageIndexes {
-		if readTopicIndex.MessageIndexes[i].Timestamp != testTopicIndex1.MessageIndexes[i].Timestamp {
-			t.Fatalf("message index timestamp mismatch: expected %d, got %d", testTopicIndex1.MessageIndexes[i].Timestamp, readTopicIndex.MessageIndexes[i].Timestamp)
+	t.Run("roundtrip", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		if err := WriteTopicIndex(buf, populated); err != nil {
+			t.Errorf("WriteTopicIndex: %v", err)
+			return
 		}
-
-		if readTopicIndex.MessageIndexes[i].OffsetInChunk != testTopicIndex1.MessageIndexes[i].OffsetInChunk {
-			t.Fatalf("message index offset in chunk mismatch: expected %d, got %d", testTopicIndex1.MessageIndexes[i].OffsetInChunk, readTopicIndex.MessageIndexes[i].OffsetInChunk)
+		got, err := ReadTopicIndex(buf)
+		if err != nil {
+			t.Errorf("ReadTopicIndex: %v", err)
+			return
 		}
-	}
-
-	if len(readTopicIndex.KeyFrameIndexes) != len(testTopicIndex1.KeyFrameIndexes) {
-		t.Fatalf("key frame indexes length mismatch: expected %d, got %d", len(testTopicIndex1.KeyFrameIndexes), len(readTopicIndex.KeyFrameIndexes))
-	}
-
-	for i := range readTopicIndex.KeyFrameIndexes {
-		if readTopicIndex.KeyFrameIndexes[i] != testTopicIndex1.KeyFrameIndexes[i] {
-			t.Fatalf("key frame index mismatch: expected %d, got %d", testTopicIndex1.KeyFrameIndexes[i], readTopicIndex.KeyFrameIndexes[i])
+		if diff := cmp.Diff(populated, got); diff != "" {
+			t.Errorf("mismatch (-want +got):\n%s", diff)
 		}
-	}
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		empty := &TopicIndex{
+			Id:              0,
+			MessageIndexes:  []*MessageIndex{},
+			KeyFrameIndexes: []uint32{},
+		}
+		buf := &bytes.Buffer{}
+		if err := WriteTopicIndex(buf, empty); err != nil {
+			t.Errorf("WriteTopicIndex: %v", err)
+			return
+		}
+		got, err := ReadTopicIndex(buf)
+		if err != nil {
+			t.Errorf("ReadTopicIndex: %v", err)
+			return
+		}
+		if diff := cmp.Diff(empty, got); diff != "" {
+			t.Errorf("mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("truncated", func(t *testing.T) {
+		_, err := ReadTopicIndex(bytes.NewReader([]byte{}))
+		if err == nil {
+			t.Errorf("expected error for empty reader, got nil")
+		} else if !errors.Is(err, io.EOF) {
+			t.Errorf("expected io.EOF, got %v", err)
+		}
+	})
 }
 
-func TestWriteReadIndexChunk(t *testing.T) {
-	buf := bytes.NewBuffer(nil)
-	err := WriteIndexChunk(buf, testIndexChunk)
-	if err != nil {
-		t.Fatalf("failed to write index chunk: %v", err)
+// TestIndexChunk covers ReadIndexChunk / WriteIndexChunk.
+func TestIndexChunk(t *testing.T) {
+	populated := &IndexChunk{
+		TopicIndexes: []*TopicIndex{
+			{
+				Id:              1,
+				MessageIndexes:  []*MessageIndex{{Timestamp: 100, OffsetInChunk: 0}},
+				KeyFrameIndexes: []uint32{0},
+			},
+			{
+				Id:              2,
+				MessageIndexes:  []*MessageIndex{{Timestamp: 200, OffsetInChunk: 16}},
+				KeyFrameIndexes: []uint32{0},
+			},
+		},
+		ChunkOffset:     512,
+		ChunkLen:        1024,
+		UncompressedLen: 2048,
 	}
 
-	readIndexChunk, err := ReadIndexChunk(buf)
-	if err != nil {
-		t.Fatalf("failed to read index chunk: %v", err)
-	}
-
-	if len(readIndexChunk.TopicIndexes) != len(testIndexChunk.TopicIndexes) {
-		t.Fatalf("topic indexes length mismatch: expected %d, got %d", len(testIndexChunk.TopicIndexes), len(readIndexChunk.TopicIndexes))
-	}
-
-	for i := range readIndexChunk.TopicIndexes {
-		if readIndexChunk.TopicIndexes[i].Id != testIndexChunk.TopicIndexes[i].Id {
-			t.Fatalf("topic index id mismatch: expected %d, got %d", testIndexChunk.TopicIndexes[i].Id, readIndexChunk.TopicIndexes[i].Id)
+	t.Run("roundtrip", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		if err := WriteIndexChunk(buf, populated); err != nil {
+			t.Errorf("WriteIndexChunk: %v", err)
+			return
 		}
-	}
+		got, err := ReadIndexChunk(buf)
+		if err != nil {
+			t.Errorf("ReadIndexChunk: %v", err)
+			return
+		}
+		if diff := cmp.Diff(populated, got); diff != "" {
+			t.Errorf("mismatch (-want +got):\n%s", diff)
+		}
+	})
 
-	if readIndexChunk.ChunkOffset != testIndexChunk.ChunkOffset {
-		t.Fatalf("chunk offset mismatch: expected %d, got %d", testIndexChunk.ChunkOffset, readIndexChunk.ChunkOffset)
-	}
+	t.Run("empty", func(t *testing.T) {
+		empty := &IndexChunk{
+			TopicIndexes:    []*TopicIndex{},
+			ChunkOffset:     0,
+			ChunkLen:        0,
+			UncompressedLen: 0,
+		}
+		buf := &bytes.Buffer{}
+		if err := WriteIndexChunk(buf, empty); err != nil {
+			t.Errorf("WriteIndexChunk: %v", err)
+			return
+		}
+		got, err := ReadIndexChunk(buf)
+		if err != nil {
+			t.Errorf("ReadIndexChunk: %v", err)
+			return
+		}
+		if diff := cmp.Diff(empty, got); diff != "" {
+			t.Errorf("mismatch (-want +got):\n%s", diff)
+		}
+	})
 
-	if readIndexChunk.ChunkLen != testIndexChunk.ChunkLen {
-		t.Fatalf("chunk len mismatch: expected %d, got %d", testIndexChunk.ChunkLen, readIndexChunk.ChunkLen)
-	}
-
-	if readIndexChunk.UncompressedLen != testIndexChunk.UncompressedLen {
-		t.Fatalf("uncompressed len mismatch: expected %d, got %d", testIndexChunk.UncompressedLen, readIndexChunk.UncompressedLen)
-	}
+	t.Run("truncated", func(t *testing.T) {
+		_, err := ReadIndexChunk(bytes.NewReader([]byte{}))
+		if err == nil {
+			t.Errorf("expected error for empty reader, got nil")
+		} else if !errors.Is(err, io.EOF) {
+			t.Errorf("expected io.EOF, got %v", err)
+		}
+	})
 }
