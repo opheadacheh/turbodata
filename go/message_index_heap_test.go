@@ -24,23 +24,3 @@ func TestMessageIndexHeap(t *testing.T) {
 		}
 	}
 }
-
-func TestReverseMessageIndexHeap(t *testing.T) {
-	h := &ReverseMessageIndexHeap{}
-	heap.Init(h)
-	heap.Push(h, &messageIndexWithTopicId{topicId: 1, messageIndex: &MessageIndex{Timestamp: 1}})
-	heap.Push(h, &messageIndexWithTopicId{topicId: 1, messageIndex: &MessageIndex{Timestamp: 2}})
-	heap.Push(h, &messageIndexWithTopicId{topicId: 1, messageIndex: &MessageIndex{Timestamp: 3}})
-
-	if h.Len() != 3 {
-		t.Errorf("heap length should be 3, but got %d", h.Len())
-	}
-
-	len := h.Len()
-	for i := 0; i < len; i++ {
-		timestamp := heap.Pop(h).(*messageIndexWithTopicId).messageIndex.Timestamp
-		if timestamp != int64(len-i) {
-			t.Errorf("heap pop should return %d, but got %d", len-i, timestamp)
-		}
-	}
-}

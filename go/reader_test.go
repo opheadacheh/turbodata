@@ -2,184 +2,210 @@ package turbodata
 
 import (
 	"bytes"
-	"encoding/binary"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 )
 
-func writeReaderFixture(t *testing.T, setup func(*Writer) error, write func(*Writer) error) []byte {
+func makeReaderFixture(t *testing.T, body []byte, compressedSummary []byte, footer *Footer) io.ReadSeeker {
 	t.Helper()
-	buf := bytes.NewBuffer(nil)
-	writer := NewWriter(buf)
-	if err := setup(writer); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	if write != nil {
-		if err := write(writer); err != nil {
-			t.Fatalf("write: %v", err)
+
+	if footer == nil {
+		footer = &Footer{
+			SummaryLen: int64(len(compressedSummary)),
+			Magic:      [5]byte{'7', 'U', 'R', 'B', '0'},
 		}
 	}
-	if err := writer.CloseTopic(); err != nil {
-		t.Fatalf("close topic: %v", err)
+
+	buf := &bytes.Buffer{}
+	if _, err := buf.Write(body); err != nil {
+		t.Fatalf("write body: %v", err)
 	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("close writer: %v", err)
+	if _, err := buf.Write(compressedSummary); err != nil {
+		t.Fatalf("write compressed summary: %v", err)
 	}
-	return buf.Bytes()
+	if err := WriteFooter(buf, footer); err != nil {
+		t.Fatalf("WriteFooter: %v", err)
+	}
+
+	return bytes.NewReader(buf.Bytes())
 }
 
-func newReaderFromBytes(t *testing.T, data []byte) *Reader {
+func makeCompressedSummary(t *testing.T, summary *Summary) []byte {
 	t.Helper()
-	reader, err := NewReader(bytes.NewReader(data))
+
+	summaryBuf := &bytes.Buffer{}
+	if err := WriteSummary(summaryBuf, summary); err != nil {
+		t.Fatalf("WriteSummary: %v", err)
+	}
+
+	compressed, err := compress(summaryBuf.Bytes())
 	if err != nil {
-		t.Fatalf("NewReader: %v", err)
+		t.Fatalf("compress summary: %v", err)
 	}
-	return reader
-}
 
-func patchFooter(data []byte, summaryLen *int64, magic *[5]byte) []byte {
-	out := append([]byte(nil), data...)
-	if summaryLen != nil {
-		binary.BigEndian.PutUint64(out[len(out)-footerLen:], uint64(*summaryLen))
-	}
-	if magic != nil {
-		copy(out[len(out)-5:], magic[:])
-	}
-	return out
-}
-
-func minimalReaderSetup(compressed bool) func(*Writer) error {
-	return func(w *Writer) error {
-		opts := []WriteOption{}
-		if compressed {
-			opts = append(opts, WithCompression())
-		}
-		return w.OpenTopics([]string{"test"}, []map[string]any{{"foo": "bar"}}, opts...)
-	}
-}
-
-func minimalReaderWrite(w *Writer) error {
-	return w.WriteMessage("test", []byte("test"), 1)
-}
-
-var minimalSummaryWanted = &Summary{
-	TopicsInfos: []*TopicsInfo{
-		{
-			TopicMetadatas: []*TopicMetadata{
-				{Id: 1, Name: "test", Metadata: map[string]any{"foo": "bar"}},
-			},
-			IndexChunkInfoList: []*IndexChunkInfo{
-				{StartTimestamp: 1, EndTimestamp: 1, Offset: 4},
-			},
-			TotalLen: 40,
-		},
-	},
-}
-
-var minimalCompressedSummaryWanted = &Summary{
-	TopicsInfos: []*TopicsInfo{
-		{
-			TopicMetadatas: []*TopicMetadata{
-				{Id: 1, Name: "test", Metadata: map[string]any{"foo": "bar", "is_compressed": true}},
-			},
-			IndexChunkInfoList: []*IndexChunkInfo{
-				{StartTimestamp: 1, EndTimestamp: 1, Offset: 17},
-			},
-			TotalLen: 40,
-		},
-	},
+	return compressed
 }
 
 func TestNewReader(t *testing.T) {
-	validData := writeReaderFixture(t, minimalReaderSetup(false), minimalReaderWrite)
+	validSummary := &Summary{TopicsInfos: []*TopicsInfo{}}
+	validCompressed := makeCompressedSummary(t, validSummary)
 
-	t.Run("valid", func(t *testing.T) {
-		reader, err := NewReader(bytes.NewReader(validData))
+	t.Run("valid_footer_and_magic", func(t *testing.T) {
+		reader, err := NewReader(makeReaderFixture(t, nil, validCompressed, nil))
 		if err != nil {
-			t.Fatalf("NewReader: %v", err)
+			t.Errorf("NewReader: %v", err)
+			return
 		}
 		if reader == nil {
-			t.Fatal("expected non-nil reader")
+			t.Errorf("NewReader returned nil reader without error")
 		}
 	})
 
-	t.Run("too_short", func(t *testing.T) {
-		_, err := NewReader(bytes.NewReader([]byte{1, 2, 3}))
+	t.Run("invalid_magic", func(t *testing.T) {
+		rs := makeReaderFixture(t, nil, validCompressed, &Footer{
+			SummaryLen: int64(len(validCompressed)),
+			Magic:      [5]byte{'B', 'A', 'D', '!', '!'},
+		})
+		_, err := NewReader(rs)
 		if err == nil {
-			t.Fatal("expected error for short file")
-		}
-		if !strings.Contains(err.Error(), "negative position") {
-			t.Fatalf("unexpected error: %v", err)
+			t.Errorf("expected invalid magic error, got nil")
+		} else if !strings.Contains(err.Error(), "invalid magic number") {
+			t.Errorf("error %q should mention invalid magic number", err)
 		}
 	})
 
-	t.Run("bad_magic", func(t *testing.T) {
-		badMagic := [5]byte{'X', 'X', 'X', 'X', 'X'}
-		data := patchFooter(validData, nil, &badMagic)
-		_, err := NewReader(bytes.NewReader(data))
+	t.Run("truncated_input", func(t *testing.T) {
+		_, err := NewReader(bytes.NewReader([]byte{0x01, 0x02}))
 		if err == nil {
-			t.Fatal("expected error for bad magic")
-		}
-		if !strings.Contains(err.Error(), "invalid magic number") {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
-
-	t.Run("truncated_footer", func(t *testing.T) {
-		data := validData[:len(validData)-5]
-		_, err := NewReader(bytes.NewReader(data))
-		if err == nil {
-			t.Fatal("expected error for truncated footer")
-		}
-		if !strings.Contains(err.Error(), "invalid magic number") {
-			t.Fatalf("unexpected error: %v", err)
+			t.Errorf("expected error for input shorter than footer, got nil")
 		}
 	})
 }
 
 func TestReaderSummary(t *testing.T) {
-	t.Run("minimal", func(t *testing.T) {
-		data := writeReaderFixture(t, minimalReaderSetup(false), minimalReaderWrite)
-		reader := newReaderFromBytes(t, data)
+	populated := &Summary{
+		TopicsInfos: []*TopicsInfo{
+			{
+				TopicMetadatas: []*TopicMetadata{
+					{Id: 1, Name: "topic/1", Metadata: map[string]any{"encoding": "json"}},
+				},
+				IndexChunkInfoList: []*IndexChunkInfo{
+					{StartTimestamp: 10, EndTimestamp: 20, Offset: 128},
+				},
+				TotalLen: 512,
+			},
+		},
+	}
+	empty := &Summary{TopicsInfos: []*TopicsInfo{}}
 
-		summary, err := reader.Summary()
-		if err != nil {
-			t.Fatalf("Summary: %v", err)
-		}
-		if diff := cmp.Diff(summary, minimalSummaryWanted); diff != "" {
-			t.Fatalf("summary mismatch: %s", diff)
+	t.Run("roundtrip_populated_and_empty", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			summary *Summary
+		}{
+			{name: "populated", summary: populated},
+			{name: "empty", summary: empty},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				compressed := makeCompressedSummary(t, tc.summary)
+				reader, err := NewReader(makeReaderFixture(t, []byte("body"), compressed, nil))
+				if err != nil {
+					t.Errorf("NewReader: %v", err)
+					return
+				}
+
+				got, err := reader.Summary()
+				if err != nil {
+					t.Errorf("Summary: %v", err)
+					return
+				}
+				if diff := cmp.Diff(tc.summary, got); diff != "" {
+					t.Errorf("summary mismatch (-want +got):\n%s", diff)
+				}
+			})
 		}
 	})
 
-	t.Run("compressed", func(t *testing.T) {
-		data := writeReaderFixture(t, minimalReaderSetup(true), minimalReaderWrite)
-		reader := newReaderFromBytes(t, data)
-
-		summary, err := reader.Summary()
+	t.Run("cached_result", func(t *testing.T) {
+		compressed := makeCompressedSummary(t, populated)
+		reader, err := NewReader(makeReaderFixture(t, []byte("body"), compressed, nil))
 		if err != nil {
-			t.Fatalf("Summary: %v", err)
+			t.Errorf("NewReader: %v", err)
+			return
 		}
-		if diff := cmp.Diff(summary, minimalCompressedSummaryWanted); diff != "" {
-			t.Fatalf("summary mismatch: %s", diff)
+
+		first, err := reader.Summary()
+		if err != nil {
+			t.Errorf("first Summary(): %v", err)
+			return
+		}
+
+		reader.rs = bytes.NewReader([]byte{})
+		reader.footer.SummaryLen = 1 << 60
+
+		second, err := reader.Summary()
+		if err != nil {
+			t.Errorf("second Summary(): %v", err)
+			return
+		}
+
+		if first != second {
+			t.Errorf("expected cached summary pointer to be reused")
 		}
 	})
 
-	t.Run("idempotent", func(t *testing.T) {
-		data := writeReaderFixture(t, minimalReaderSetup(false), minimalReaderWrite)
-		reader := newReaderFromBytes(t, data)
+	t.Run("truncated_compressed_summary", func(t *testing.T) {
+		compressed := makeCompressedSummary(t, populated)
+		rs := makeReaderFixture(t, nil, compressed, &Footer{
+			SummaryLen: int64(len(compressed) + 1),
+			Magic:      [5]byte{'7', 'U', 'R', 'B', '0'},
+		})
+		reader, err := NewReader(rs)
+		if err != nil {
+			t.Errorf("NewReader: %v", err)
+			return
+		}
 
-		s1, err := reader.Summary()
-		if err != nil {
-			t.Fatalf("first Summary: %v", err)
+		_, err = reader.Summary()
+		if err == nil {
+			t.Errorf("expected error for truncated compressed summary, got nil")
 		}
-		s2, err := reader.Summary()
+	})
+
+	t.Run("invalid_compressed_bytes", func(t *testing.T) {
+		reader, err := NewReader(makeReaderFixture(t, nil, []byte("not-zstd-data"), nil))
 		if err != nil {
-			t.Fatalf("second Summary: %v", err)
+			t.Errorf("NewReader: %v", err)
+			return
 		}
-		if s1 != s2 {
-			t.Fatal("expected cached summary pointer")
+
+		_, err = reader.Summary()
+		if err == nil {
+			t.Errorf("expected decompress error for invalid compressed bytes, got nil")
+		}
+	})
+
+	t.Run("invalid_summary_payload", func(t *testing.T) {
+		compressed, err := compress([]byte{0x01, 0x02})
+		if err != nil {
+			t.Fatalf("compress invalid summary payload: %v", err)
+		}
+
+		reader, err := NewReader(makeReaderFixture(t, nil, compressed, nil))
+		if err != nil {
+			t.Errorf("NewReader: %v", err)
+			return
+		}
+
+		_, err = reader.Summary()
+		if err == nil {
+			t.Errorf("expected summary parse error, got nil")
+		} else if !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Errorf("expected EOF parse error, got %v", err)
 		}
 	})
 }

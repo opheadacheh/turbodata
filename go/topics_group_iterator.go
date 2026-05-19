@@ -25,16 +25,17 @@ type TopicsGroupIterator struct {
 	bytesReader    *bytes.Reader
 
 	// Read config.
-	topicIds       map[uint16]struct{}
-	startTimestamp int64
-	endTimestamp   int64
-	order          Order
-	isCompressed   bool
+	topicIds        map[uint16]struct{}
+	startTimestamp  int64
+	endTimestamp    int64
+	order           Order
+	isCompressed    bool
+	incrementFactor int
 
 	// Index chunk queue.
 	indexChunkInfoList         []*IndexChunkInfo
+	indexChunkInfoLens         []int64
 	currentIndexChunkInfoIndex int
-	indexChunkInfoTotalLen     int64
 
 	// Message index queue.
 	sortedMessageIndexes []*messageIndexWithTopicId
@@ -44,7 +45,8 @@ type TopicsGroupIterator struct {
 
 func newTopicsGroupIterator(it *MessageIterator, topicIds map[uint16]struct{}, topicsInfo *TopicsInfo) *TopicsGroupIterator {
 	indexChunkInfoList := make([]*IndexChunkInfo, 0, len(topicsInfo.IndexChunkInfoList))
-	for _, indexChunkInfo := range topicsInfo.IndexChunkInfoList {
+	indexChunkInfoLens := make([]int64, 0, len(topicsInfo.IndexChunkInfoList))
+	for i, indexChunkInfo := range topicsInfo.IndexChunkInfoList {
 		if indexChunkInfo.EndTimestamp < it.startTimestamp {
 			continue
 		}
@@ -54,20 +56,26 @@ func newTopicsGroupIterator(it *MessageIterator, topicIds map[uint16]struct{}, t
 		}
 
 		indexChunkInfoList = append(indexChunkInfoList, indexChunkInfo)
+		if i < len(topicsInfo.IndexChunkInfoList)-1 {
+			indexChunkInfoLens = append(indexChunkInfoLens, topicsInfo.IndexChunkInfoList[i+1].Offset-indexChunkInfo.Offset)
+		} else {
+			indexChunkInfoLens = append(indexChunkInfoLens, topicsInfo.TotalLen-indexChunkInfo.Offset+topicsInfo.IndexChunkInfoList[0].Offset)
+		}
 	}
 
-	var sortHeap heap.Interface
-	switch it.order {
-	case TimeOrder:
-		sortHeap = &MessageIndexHeap{}
-	case ReverseTimeOrder:
-		sortHeap = &ReverseMessageIndexHeap{}
-	}
+	sortHeap := &MessageIndexHeap{}
 	heap.Init(sortHeap)
 
 	isCompressed, ok := topicsInfo.TopicMetadatas[0].Metadata["is_compressed"].(bool)
 	if !ok {
 		isCompressed = false
+	}
+
+	incrementFactor := 1
+	currentIndexChunkInfoIndex := 0
+	if it.order == ReverseTimeOrder {
+		incrementFactor = -1
+		currentIndexChunkInfoIndex = len(indexChunkInfoList) - 1
 	}
 
 	tgi := &TopicsGroupIterator{
@@ -85,41 +93,39 @@ func newTopicsGroupIterator(it *MessageIterator, topicIds map[uint16]struct{}, t
 		idToMessageIndexes: make(map[uint16][]*MessageIndex),
 		idToIndex:          make(map[uint16]int),
 
-		topicIds:       topicIds,
-		startTimestamp: it.startTimestamp,
-		endTimestamp:   it.endTimestamp,
-		order:          it.order,
-		isCompressed:   isCompressed,
+		topicIds:        topicIds,
+		startTimestamp:  it.startTimestamp,
+		endTimestamp:    it.endTimestamp,
+		order:           it.order,
+		isCompressed:    isCompressed,
+		incrementFactor: incrementFactor,
 
 		indexChunkInfoList:         indexChunkInfoList,
-		currentIndexChunkInfoIndex: 0,
-		indexChunkInfoTotalLen:     topicsInfo.TotalLen,
+		currentIndexChunkInfoIndex: currentIndexChunkInfoIndex,
+		indexChunkInfoLens:         indexChunkInfoLens,
 	}
 	tgi.sortItemPool.New = func() any { return &messageIndexWithTopicId{} }
 	return tgi
 }
 
 func (it *TopicsGroupIterator) Next() (int64, uint16, []byte, error) {
-	for it.currentMessageIndex >= len(it.messageIndexes) {
-		if it.currentIndexChunkInfoIndex >= len(it.indexChunkInfoList) {
+	for it.currentMessageIndex >= len(it.messageIndexes) || it.currentMessageIndex < 0 {
+		if it.currentIndexChunkInfoIndex >= len(it.indexChunkInfoList) || it.currentIndexChunkInfoIndex < 0 {
 			return 0, 0, nil, io.EOF
 		}
 
-		currentIndexChunkInfoLen := int64(0)
-		if it.currentIndexChunkInfoIndex < len(it.indexChunkInfoList)-1 {
-			currentIndexChunkInfoLen = it.indexChunkInfoList[it.currentIndexChunkInfoIndex+1].Offset - it.indexChunkInfoList[it.currentIndexChunkInfoIndex].Offset
-		} else {
-			currentIndexChunkInfoLen = it.indexChunkInfoTotalLen - it.indexChunkInfoList[it.currentIndexChunkInfoIndex].Offset + it.indexChunkInfoList[0].Offset
-		}
-
-		indexChunk, err := it.loadIndexChunk(it.indexChunkInfoList[it.currentIndexChunkInfoIndex], currentIndexChunkInfoLen)
+		indexChunk, err := it.loadIndexChunk(it.indexChunkInfoList[it.currentIndexChunkInfoIndex], it.indexChunkInfoLens[it.currentIndexChunkInfoIndex])
 		if err != nil {
 			return 0, 0, nil, err
 		}
-		it.currentIndexChunkInfoIndex++
+		it.currentIndexChunkInfoIndex += it.incrementFactor
 
 		it.sortAndFilterMessageIndexes(indexChunk.TopicIndexes, indexChunk.UncompressedLen)
+
 		it.currentMessageIndex = 0
+		if it.order == ReverseTimeOrder {
+			it.currentMessageIndex = len(it.messageIndexes) - 1
+		}
 
 		if len(it.messageIndexes) > 0 {
 			if err := it.loadDataChunk(indexChunk.ChunkOffset, indexChunk.ChunkLen); err != nil {
@@ -128,16 +134,16 @@ func (it *TopicsGroupIterator) Next() (int64, uint16, []byte, error) {
 		}
 	}
 
-	messageIndex := it.messageIndexes[it.currentMessageIndex]
-	rangeEnd := messageIndex.messageIndex.OffsetInChunk + it.messageLens[it.currentMessageIndex]
-	it.currentMessageIndex++
+	messageIndex := it.sortedMessageIndexes[it.currentMessageIndex]
+	rangeEnd := messageIndex.messageIndex.OffsetInChunk + it.sortedMessageLens[it.currentMessageIndex]
+	it.currentMessageIndex += it.incrementFactor
 
 	return messageIndex.messageIndex.Timestamp, messageIndex.topicId, it.messageBuf.Data[messageIndex.messageIndex.OffsetInChunk:rangeEnd], nil
 }
 
 func (it *TopicsGroupIterator) sortAndFilterMessageIndexes(topicIndexes []*TopicIndex, totalLen int64) {
 	// Return items from the previous chunk back to the pool — they've been fully consumed.
-	for _, item := range it.messageIndexes {
+	for _, item := range it.sortedMessageIndexes {
 		item.messageIndex = nil
 		it.sortItemPool.Put(item)
 	}
