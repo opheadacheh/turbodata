@@ -16,13 +16,13 @@ type TopicsGroupIterator struct {
 	idToIndex          map[uint16]int
 
 	// Memory buffers.
-	loadBuf        *ReusableBuffer
-	IndexBuf       *ReusableBuffer
-	messageBuf     *ReusableBuffer
-	sortItemPool   sync.Pool
-	messageIndexes []*messageIndexWithTopicId
-	messageLens    []int64
-	bytesReader    *bytes.Reader
+	loadBuf              *ReusableBuffer
+	IndexBuf             *ReusableBuffer
+	messageBuf           *ReusableBuffer
+	sortItemPool         sync.Pool
+	sortedMessageIndexes []*messageIndexWithTopicId
+	sortedMessageLens    []int64
+	bytesReader          *bytes.Reader
 
 	// Read config.
 	topicIds        map[uint16]struct{}
@@ -38,9 +38,9 @@ type TopicsGroupIterator struct {
 	currentIndexChunkInfoIndex int
 
 	// Message index queue.
-	sortedMessageIndexes []*messageIndexWithTopicId
-	sortedMessageLens    []int64
-	currentMessageIndex  int
+	filteredMessageIndexes []*messageIndexWithTopicId
+	filteredMessageLens    []int64
+	currentMessageIndex    int
 }
 
 func newTopicsGroupIterator(it *MessageIterator, topicIds map[uint16]struct{}, topicsInfo *TopicsInfo) *TopicsGroupIterator {
@@ -83,12 +83,12 @@ func newTopicsGroupIterator(it *MessageIterator, topicIds map[uint16]struct{}, t
 
 		sortHeap: sortHeap,
 
-		loadBuf:        NewReusableBuffer(),
-		IndexBuf:       NewReusableBuffer(),
-		messageBuf:     NewReusableBuffer(),
-		messageIndexes: make([]*messageIndexWithTopicId, 0),
-		messageLens:    make([]int64, 0),
-		bytesReader:    bytes.NewReader(nil),
+		loadBuf:              NewReusableBuffer(),
+		IndexBuf:             NewReusableBuffer(),
+		messageBuf:           NewReusableBuffer(),
+		sortedMessageIndexes: make([]*messageIndexWithTopicId, 0),
+		sortedMessageLens:    make([]int64, 0),
+		bytesReader:          bytes.NewReader(nil),
 
 		idToMessageIndexes: make(map[uint16][]*MessageIndex),
 		idToIndex:          make(map[uint16]int),
@@ -109,7 +109,7 @@ func newTopicsGroupIterator(it *MessageIterator, topicIds map[uint16]struct{}, t
 }
 
 func (it *TopicsGroupIterator) Next() (int64, uint16, []byte, error) {
-	for it.currentMessageIndex >= len(it.messageIndexes) || it.currentMessageIndex < 0 {
+	for it.currentMessageIndex >= len(it.filteredMessageIndexes) || it.currentMessageIndex < 0 {
 		if it.currentIndexChunkInfoIndex >= len(it.indexChunkInfoList) || it.currentIndexChunkInfoIndex < 0 {
 			return 0, 0, nil, io.EOF
 		}
@@ -124,18 +124,18 @@ func (it *TopicsGroupIterator) Next() (int64, uint16, []byte, error) {
 
 		it.currentMessageIndex = 0
 		if it.order == ReverseTimeOrder {
-			it.currentMessageIndex = len(it.messageIndexes) - 1
+			it.currentMessageIndex = len(it.filteredMessageIndexes) - 1
 		}
 
-		if len(it.messageIndexes) > 0 {
+		if len(it.filteredMessageIndexes) > 0 {
 			if err := it.loadDataChunk(indexChunk.ChunkOffset, indexChunk.ChunkLen); err != nil {
 				return 0, 0, nil, err
 			}
 		}
 	}
 
-	messageIndex := it.sortedMessageIndexes[it.currentMessageIndex]
-	rangeEnd := messageIndex.messageIndex.OffsetInChunk + it.sortedMessageLens[it.currentMessageIndex]
+	messageIndex := it.filteredMessageIndexes[it.currentMessageIndex]
+	rangeEnd := messageIndex.messageIndex.OffsetInChunk + it.filteredMessageLens[it.currentMessageIndex]
 	it.currentMessageIndex += it.incrementFactor
 
 	return messageIndex.messageIndex.Timestamp, messageIndex.topicId, it.messageBuf.Data[messageIndex.messageIndex.OffsetInChunk:rangeEnd], nil
@@ -143,7 +143,7 @@ func (it *TopicsGroupIterator) Next() (int64, uint16, []byte, error) {
 
 func (it *TopicsGroupIterator) sortAndFilterMessageIndexes(topicIndexes []*TopicIndex, totalLen int64) {
 	// Return items from the previous chunk back to the pool — they've been fully consumed.
-	for _, item := range it.sortedMessageIndexes {
+	for _, item := range it.filteredMessageIndexes {
 		item.messageIndex = nil
 		it.sortItemPool.Put(item)
 	}
@@ -152,15 +152,15 @@ func (it *TopicsGroupIterator) sortAndFilterMessageIndexes(topicIndexes []*Topic
 	for _, topicIndex := range topicIndexes {
 		totalMessageIndexes += len(topicIndex.MessageIndexes)
 	}
-	if cap(it.messageIndexes) < totalMessageIndexes {
-		it.messageIndexes = make([]*messageIndexWithTopicId, 0, totalMessageIndexes)
+	if cap(it.sortedMessageIndexes) < totalMessageIndexes {
+		it.sortedMessageIndexes = make([]*messageIndexWithTopicId, 0, totalMessageIndexes)
 	} else {
-		it.messageIndexes = it.messageIndexes[:0]
+		it.sortedMessageIndexes = it.sortedMessageIndexes[:0]
 	}
-	if cap(it.messageLens) < totalMessageIndexes {
-		it.messageLens = make([]int64, totalMessageIndexes)
+	if cap(it.sortedMessageLens) < totalMessageIndexes {
+		it.sortedMessageLens = make([]int64, totalMessageIndexes)
 	} else {
-		it.messageLens = it.messageLens[:totalMessageIndexes]
+		it.sortedMessageLens = it.sortedMessageLens[:totalMessageIndexes]
 	}
 
 	if len(topicIndexes) == 1 {
@@ -170,7 +170,7 @@ func (it *TopicsGroupIterator) sortAndFilterMessageIndexes(topicIndexes []*Topic
 			item := it.sortItemPool.Get().(*messageIndexWithTopicId)
 			item.topicId = topicIndex.Id
 			item.messageIndex = messageIndex
-			it.messageIndexes = append(it.messageIndexes, item)
+			it.sortedMessageIndexes = append(it.sortedMessageIndexes, item)
 		}
 	} else {
 		for k := range it.idToMessageIndexes {
@@ -195,7 +195,7 @@ func (it *TopicsGroupIterator) sortAndFilterMessageIndexes(topicIndexes []*Topic
 		for it.sortHeap.Len() > 0 {
 			item, _ := heap.Pop(it.sortHeap).(*messageIndexWithTopicId)
 
-			it.messageIndexes = append(it.messageIndexes, item)
+			it.sortedMessageIndexes = append(it.sortedMessageIndexes, item)
 
 			topicId := item.topicId
 			if it.idToIndex[topicId] >= len(it.idToMessageIndexes[topicId]) {
@@ -209,42 +209,42 @@ func (it *TopicsGroupIterator) sortAndFilterMessageIndexes(topicIndexes []*Topic
 			it.idToIndex[topicId]++
 		}
 	}
-	for i := 0; i < len(it.messageIndexes)-1; i++ {
-		it.messageLens[i] = it.messageIndexes[i+1].messageIndex.OffsetInChunk - it.messageIndexes[i].messageIndex.OffsetInChunk
+	for i := 0; i < len(it.sortedMessageIndexes)-1; i++ {
+		it.sortedMessageLens[i] = it.sortedMessageIndexes[i+1].messageIndex.OffsetInChunk - it.sortedMessageIndexes[i].messageIndex.OffsetInChunk
 	}
-	it.messageLens[len(it.messageLens)-1] = totalLen - it.messageIndexes[len(it.messageIndexes)-1].messageIndex.OffsetInChunk
+	it.sortedMessageLens[len(it.sortedMessageLens)-1] = totalLen - it.sortedMessageIndexes[len(it.sortedMessageIndexes)-1].messageIndex.OffsetInChunk
 
-	if cap(it.sortedMessageIndexes) < len(it.messageIndexes) {
-		it.sortedMessageIndexes = make([]*messageIndexWithTopicId, 0, len(it.messageIndexes))
+	if cap(it.filteredMessageIndexes) < len(it.sortedMessageIndexes) {
+		it.filteredMessageIndexes = make([]*messageIndexWithTopicId, 0, len(it.sortedMessageIndexes))
 	} else {
-		it.sortedMessageIndexes = it.sortedMessageIndexes[:0]
+		it.filteredMessageIndexes = it.filteredMessageIndexes[:0]
 	}
-	if cap(it.sortedMessageLens) < len(it.messageIndexes) {
-		it.sortedMessageLens = make([]int64, 0, len(it.messageIndexes))
+	if cap(it.filteredMessageLens) < len(it.sortedMessageIndexes) {
+		it.filteredMessageLens = make([]int64, 0, len(it.sortedMessageIndexes))
 	} else {
-		it.sortedMessageLens = it.sortedMessageLens[:0]
+		it.filteredMessageLens = it.filteredMessageLens[:0]
 	}
 
-	for i := 0; i < len(it.messageIndexes); i++ {
-		if _, ok := it.topicIds[it.messageIndexes[i].topicId]; !ok {
-			it.messageIndexes[i].messageIndex = nil
-			it.sortItemPool.Put(it.messageIndexes[i])
+	for i := 0; i < len(it.sortedMessageIndexes); i++ {
+		if _, ok := it.topicIds[it.sortedMessageIndexes[i].topicId]; !ok {
+			it.sortedMessageIndexes[i].messageIndex = nil
+			it.sortItemPool.Put(it.sortedMessageIndexes[i])
 			continue
 		}
 
-		if it.messageIndexes[i].messageIndex.Timestamp < it.startTimestamp {
-			it.messageIndexes[i].messageIndex = nil
-			it.sortItemPool.Put(it.messageIndexes[i])
+		if it.sortedMessageIndexes[i].messageIndex.Timestamp < it.startTimestamp {
+			it.sortedMessageIndexes[i].messageIndex = nil
+			it.sortItemPool.Put(it.sortedMessageIndexes[i])
 			continue
 		}
-		if it.messageIndexes[i].messageIndex.Timestamp > it.endTimestamp {
-			it.messageIndexes[i].messageIndex = nil
-			it.sortItemPool.Put(it.messageIndexes[i])
+		if it.sortedMessageIndexes[i].messageIndex.Timestamp > it.endTimestamp {
+			it.sortedMessageIndexes[i].messageIndex = nil
+			it.sortItemPool.Put(it.sortedMessageIndexes[i])
 			continue
 		}
 
-		it.sortedMessageIndexes = append(it.sortedMessageIndexes, it.messageIndexes[i])
-		it.sortedMessageLens = append(it.sortedMessageLens, it.messageLens[i])
+		it.filteredMessageIndexes = append(it.filteredMessageIndexes, it.sortedMessageIndexes[i])
+		it.filteredMessageLens = append(it.filteredMessageLens, it.sortedMessageLens[i])
 	}
 }
 
