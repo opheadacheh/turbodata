@@ -4,6 +4,7 @@ type message struct {
 	topicId    uint16
 	data       []byte
 	groupIndex int
+	timestamp  int64
 }
 
 // Time ordered message heap.
@@ -11,7 +12,7 @@ type MessageHeap []*message
 
 func (h MessageHeap) Len() int { return len(h) }
 func (h MessageHeap) Less(i, j int) bool {
-	return h[i].groupIndex < h[j].groupIndex
+	return h[i].timestamp < h[j].timestamp
 }
 func (h MessageHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
 
@@ -32,7 +33,7 @@ type ReverseMessageHeap []*message
 
 func (h ReverseMessageHeap) Len() int { return len(h) }
 func (h ReverseMessageHeap) Less(i, j int) bool {
-	return h[i].groupIndex > h[j].groupIndex
+	return h[i].timestamp > h[j].timestamp
 }
 func (h ReverseMessageHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
 

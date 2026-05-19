@@ -16,7 +16,9 @@ type Reader struct {
 const footerLen = 13
 
 func NewReader(rs io.ReadSeeker) (*Reader, error) {
-	rs.Seek(-footerLen, io.SeekEnd)
+	if _, err := rs.Seek(-footerLen, io.SeekEnd); err != nil {
+		return nil, err
+	}
 
 	footer, err := ReadFooter(rs)
 	if err != nil {
@@ -38,10 +40,12 @@ func (r *Reader) Summary() (*Summary, error) {
 		return r.summary, nil
 	}
 
-	r.rs.Seek(-r.footer.SummaryLen-footerLen, io.SeekEnd)
+	if _, err := r.rs.Seek(-r.footer.SummaryLen-footerLen, io.SeekEnd); err != nil {
+		return nil, err
+	}
 
 	compressed := make([]byte, r.footer.SummaryLen)
-	if _, err := r.rs.Read(compressed); err != nil {
+	if _, err := io.ReadFull(r.rs, compressed); err != nil {
 		return nil, err
 	}
 	decompressed, err := decompress(compressed)
@@ -53,6 +57,8 @@ func (r *Reader) Summary() (*Summary, error) {
 	if err != nil {
 		return nil, err
 	}
+	r.summary = summary
+
 	return summary, nil
 }
 

@@ -2,19 +2,25 @@ package turbodata
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 
 	"github.com/vmihailenco/msgpack/v5"
 )
 
+const maxStringLen = 64 * 1024 * 1024 // 64 MiB
+
 func readString(r io.Reader) (string, error) {
-	var len uint32
-	if err := binary.Read(r, binary.BigEndian, &len); err != nil {
+	var strLen uint32
+	if err := binary.Read(r, binary.BigEndian, &strLen); err != nil {
 		return "", err
 	}
+	if strLen > maxStringLen {
+		return "", fmt.Errorf("string length %d exceeds maximum allowed %d", strLen, maxStringLen)
+	}
 
-	buf := make([]byte, len)
-	if err := binary.Read(r, binary.BigEndian, &buf); err != nil {
+	buf := make([]byte, strLen)
+	if _, err := io.ReadFull(r, buf); err != nil {
 		return "", err
 	}
 
@@ -30,14 +36,19 @@ func writeString(w io.Writer, s string) error {
 	return binary.Write(w, binary.BigEndian, strBytes)
 }
 
+const maxMapLen = 64 * 1024 * 1024 // 64 MiB
+
 func readMap(r io.Reader) (map[string]any, error) {
-	var len uint32
-	if err := binary.Read(r, binary.BigEndian, &len); err != nil {
+	var mapLen uint32
+	if err := binary.Read(r, binary.BigEndian, &mapLen); err != nil {
 		return nil, err
 	}
+	if mapLen > maxMapLen {
+		return nil, fmt.Errorf("map length %d exceeds maximum allowed %d", mapLen, maxMapLen)
+	}
 
-	buf := make([]byte, len)
-	if err := binary.Read(r, binary.BigEndian, &buf); err != nil {
+	buf := make([]byte, mapLen)
+	if _, err := io.ReadFull(r, buf); err != nil {
 		return nil, err
 	}
 
@@ -55,8 +66,8 @@ func writeMap(w io.Writer, m map[string]any) error {
 		return err
 	}
 
-	len := uint32(len(bytes))
-	if err := binary.Write(w, binary.BigEndian, len); err != nil {
+	mapLen := uint32(len(bytes))
+	if err := binary.Write(w, binary.BigEndian, mapLen); err != nil {
 		return err
 	}
 

@@ -1,6 +1,7 @@
 package turbodata
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 
 type WriterConfig struct {
 	namesToIds   map[string]uint16
+	topicIds     []uint16
 	chunkConfig  *ChunkConfig
 	isCompressed bool
 }
@@ -16,6 +18,7 @@ type WriterConfig struct {
 type Writer struct {
 	// IO resources.
 	w           io.Writer
+	bw          *bufio.Writer
 	buf         *bytes.Buffer
 	compressBuf *ReusableBuffer
 
@@ -38,8 +41,10 @@ type Writer struct {
 }
 
 func NewWriter(w io.Writer) *Writer {
+	bw := bufio.NewWriterSize(w, 128*1024)
 	return &Writer{
-		w: w,
+		w:  bw,
+		bw: bw,
 		footer: &Footer{
 			Magic: [5]byte{'7', 'U', 'R', 'B', '0'},
 		},
@@ -56,10 +61,13 @@ func NewWriter(w io.Writer) *Writer {
 
 func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...WriteOption) error {
 	if w.isTopicOpen {
-		return fmt.Errorf("topic already opened, close it first")
+		return ErrTopicAlreadyOpen
 	}
 	if len(names) != len(metadatas) {
-		return fmt.Errorf("names and metadatas must have the same length")
+		return ErrNamesMetadatasMismatch
+	}
+	if len(names) == 0 {
+		return ErrNoTopicsToOpen
 	}
 
 	w.isTopicOpen = true
@@ -75,6 +83,7 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 
 	topicMedatas := make([]*TopicMetadata, len(names))
 	namesToIds := make(map[string]uint16)
+	topicIds := make([]uint16, len(names))
 	for i := range names {
 		w.currentTopicId++
 		topicMedatas[i] = &TopicMetadata{
@@ -84,6 +93,7 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 		}
 
 		namesToIds[names[i]] = w.currentTopicId
+		topicIds[i] = w.currentTopicId
 		w.idToMessageIndexes[w.currentTopicId] = []*MessageIndex{}
 	}
 
@@ -108,12 +118,13 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 
 	w.writerConfig = &WriterConfig{
 		namesToIds:   namesToIds,
+		topicIds:     topicIds,
 		chunkConfig:  chunkConfig,
 		isCompressed: isCompressed,
 	}
 
 	w.chunkStatus = &ChunkStatus{
-		startTimestamp: 0,
+		startTimestamp: -1,
 		size:           0,
 		count:          0,
 	}
@@ -121,13 +132,17 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 }
 
 func (w *Writer) WriteMessage(topicName string, message []byte, timestamp int64) error {
+	if !w.isTopicOpen {
+		return ErrTopicNotOpened
+	}
+
 	if timestamp < w.lastTimestamp {
-		return fmt.Errorf("timestamp cannot decrease, current: %d < last: %d", timestamp, w.lastTimestamp)
+		return fmt.Errorf("timestamp cannot decrease, current: %d < last: %d: %w", timestamp, w.lastTimestamp, ErrTimestampDecreases)
 	}
 
 	id, ok := w.writerConfig.namesToIds[topicName]
 	if !ok {
-		return fmt.Errorf("topic name: %s not registered with OpenTopics", topicName)
+		return fmt.Errorf("topic name: %s: %w", topicName, ErrTopicNotRegistered)
 	}
 
 	w.lastTimestamp = timestamp
@@ -141,24 +156,18 @@ func (w *Writer) WriteMessage(topicName string, message []byte, timestamp int64)
 	switch w.writerConfig.chunkConfig.Mode {
 	case ChunkThresholdModeSize:
 		w.chunkStatus.size += int64(len(message))
-	case ChunkThresholdModeDuration:
-		if w.chunkStatus.startTimestamp == 0 {
-			w.chunkStatus.startTimestamp = timestamp
-		}
-	case ChunkThresholdModeCount:
-		w.chunkStatus.count++
-	}
-
-	switch w.writerConfig.chunkConfig.Mode {
-	case ChunkThresholdModeSize:
 		if w.chunkStatus.size >= w.writerConfig.chunkConfig.Size {
 			return w.writeChunk()
 		}
 	case ChunkThresholdModeDuration:
+		if w.chunkStatus.startTimestamp == -1 {
+			w.chunkStatus.startTimestamp = timestamp
+		}
 		if timestamp-w.chunkStatus.startTimestamp >= w.writerConfig.chunkConfig.Duration {
 			return w.writeChunk()
 		}
 	case ChunkThresholdModeCount:
+		w.chunkStatus.count++
 		if w.chunkStatus.count >= w.writerConfig.chunkConfig.Count {
 			return w.writeChunk()
 		}
@@ -169,12 +178,14 @@ func (w *Writer) WriteMessage(topicName string, message []byte, timestamp int64)
 
 func (w *Writer) CloseTopic() error {
 	if !w.isTopicOpen {
-		return fmt.Errorf("topic is already closed")
+		return ErrTopicAlreadyClosed
 	}
 	w.isTopicOpen = false
 
 	if w.buf.Len() > 0 {
-		w.writeChunk()
+		if err := w.writeChunk(); err != nil {
+			return err
+		}
 	}
 
 	w.indexChunksList = append(w.indexChunksList, w.indexChunks)
@@ -192,13 +203,18 @@ func (w *Writer) writeChunk() error {
 		bytes = w.buf.Bytes()
 	}
 
-	topicIndexes := []*TopicIndex{}
-	for id, messageIndexes := range w.idToMessageIndexes {
+	topicIndexes := make([]*TopicIndex, 0, len(w.writerConfig.topicIds))
+	for _, id := range w.writerConfig.topicIds {
+		messageIndexes := w.idToMessageIndexes[id]
+		if len(messageIndexes) == 0 {
+			continue
+		}
 		topicIndexes = append(topicIndexes, &TopicIndex{
 			Id:              id,
 			MessageIndexes:  messageIndexes,
 			KeyFrameIndexes: []uint32{},
 		})
+		w.idToMessageIndexes[id] = []*MessageIndex{}
 	}
 
 	w.indexChunks = append(w.indexChunks, &IndexChunk{
@@ -208,11 +224,16 @@ func (w *Writer) writeChunk() error {
 		UncompressedLen: uncompressedLen,
 	})
 
-	w.w.Write(bytes)
-	w.offset += int64(len(bytes))
-	fmt.Printf("wrote chunk: %d\n", w.offset)
+	n, err := w.w.Write(bytes)
+	if err != nil {
+		return err
+	}
+	if n != len(bytes) {
+		return fmt.Errorf("wrote %d bytes, expected %d", n, len(bytes))
+	}
+	w.offset += int64(n)
 
-	w.chunkStatus.startTimestamp = 0
+	w.chunkStatus.startTimestamp = -1
 	w.chunkStatus.size = 0
 	w.chunkStatus.count = 0
 	w.buf.Reset()
@@ -227,15 +248,13 @@ func (w *Writer) writeIndexChunks() error {
 			if err := WriteIndexChunk(w.buf, indexChunk); err != nil {
 				return err
 			}
-			Print(indexChunk)
 
 			compressInto(w.buf.Bytes(), w.compressBuf)
 			compressed := w.compressBuf.Data
-			fmt.Printf("before compress: %d, after compress: %d\n", w.buf.Len(), len(compressed))
 			w.buf.Reset()
 
 			startTimestamp := int64(math.MaxInt64)
-			endTimestamp := int64(0)
+			endTimestamp := int64(math.MinInt64)
 			for _, topicIndex := range indexChunk.TopicIndexes {
 				if topicIndex.MessageIndexes[0].Timestamp < startTimestamp {
 					startTimestamp = topicIndex.MessageIndexes[0].Timestamp
@@ -251,10 +270,15 @@ func (w *Writer) writeIndexChunks() error {
 				Offset:         w.offset,
 			})
 
-			w.w.Write(compressed)
-			w.offset += int64(len(compressed))
-			totalLen += int64(len(compressed))
-			fmt.Printf("wrote index chunk: %d\n", w.offset)
+			n, err := w.w.Write(compressed)
+			if err != nil {
+				return err
+			}
+			if n != len(compressed) {
+				return fmt.Errorf("wrote %d bytes, expected %d", n, len(compressed))
+			}
+			w.offset += int64(n)
+			totalLen += int64(n)
 		}
 		w.summary.TopicsInfos[i].TotalLen = totalLen
 	}
@@ -267,13 +291,17 @@ func (w *Writer) writeSummary() error {
 	}
 	compressInto(w.buf.Bytes(), w.compressBuf)
 	compressed := w.compressBuf.Data
-	fmt.Printf("before compress: %d, after compress: %d\n", w.buf.Len(), len(compressed))
 	w.buf.Reset()
 
-	w.w.Write(compressed)
-	w.offset += int64(len(compressed))
-	w.footer.SummaryLen = int64(len(compressed))
-	fmt.Printf("wrote summary: %d\n", w.offset)
+	n, err := w.w.Write(compressed)
+	if err != nil {
+		return err
+	}
+	if n != len(compressed) {
+		return fmt.Errorf("wrote %d bytes, expected %d", n, len(compressed))
+	}
+	w.offset += int64(n)
+	w.footer.SummaryLen = int64(n)
 	return nil
 }
 
@@ -286,12 +314,17 @@ func (w *Writer) writeFooter() error {
 
 func (w *Writer) Close() error {
 	if w.isTopicOpen {
-		return fmt.Errorf("topic is not closed, call CloseTopic first")
+		return ErrTopicNotClosed
 	}
 
-	w.writeIndexChunks()
-	w.writeSummary()
-	w.writeFooter()
-
-	return nil
+	if err := w.writeIndexChunks(); err != nil {
+		return err
+	}
+	if err := w.writeSummary(); err != nil {
+		return err
+	}
+	if err := w.writeFooter(); err != nil {
+		return err
+	}
+	return w.bw.Flush()
 }

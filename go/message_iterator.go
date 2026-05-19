@@ -2,7 +2,6 @@ package turbodata
 
 import (
 	"container/heap"
-	"fmt"
 	"io"
 	"math"
 )
@@ -23,29 +22,6 @@ type MessageIterator struct {
 	topicIdToNames       map[uint16]string
 }
 
-func prepareReusableBuf(buf *ReusableBuffer, len int64) {
-	if cap(buf.Data) < int(len) {
-		buf.Data = make([]byte, len)
-		return
-	}
-
-	buf.Data = buf.Data[:len]
-}
-
-func getMessageIndexLens(messageIndexes []*MessageIndex, totalLen int64) []int64 {
-	messageIndexLens := make([]int64, len(messageIndexes))
-	for i, messageIndex := range messageIndexes {
-		if i == 0 {
-			continue
-		}
-		messageIndexLens[i-1] = messageIndex.OffsetInChunk - messageIndexes[i-1].OffsetInChunk
-	}
-
-	messageIndexLens[len(messageIndexLens)-1] = totalLen - messageIndexes[len(messageIndexes)-1].OffsetInChunk
-
-	return messageIndexLens
-}
-
 func newMessageIterator(rs io.ReadSeeker, summary *Summary) *MessageIterator {
 	return &MessageIterator{
 		rs:             rs,
@@ -58,7 +34,7 @@ func newMessageIterator(rs io.ReadSeeker, summary *Summary) *MessageIterator {
 	}
 }
 
-func (it *MessageIterator) prepare() error {
+func (it *MessageIterator) prepare() {
 	switch it.order {
 	case TimeOrder:
 		it.heap = &MessageHeap{}
@@ -106,52 +82,53 @@ func (it *MessageIterator) prepare() error {
 			break
 		}
 	}
-
-	return nil
 }
 
-func (it *MessageIterator) NextInto(buf *ReusableBuffer) (string, error) {
+func (it *MessageIterator) NextInto(buf *ReusableBuffer) (int64, string, error) {
 	if !it.loaded {
 		if err := it.initLoad(); err != nil {
-			return "", err
+			return 0, "", err
 		}
 	}
 	it.loaded = true
 
 	if it.heap.Len() == 0 {
-		return "", io.EOF
+		return 0, "", io.EOF
 	}
-
-	fmt.Println("heap len", it.heap.Len())
 
 	item, _ := heap.Pop(it.heap).(*message)
 	buf.Prepare(len(item.data))
 	copy(buf.Data, item.data)
 
+	retTimestamp := item.timestamp
+	retTopicId := item.topicId
+
 	topicsGroupIt := it.topicsGroupIterators[item.groupIndex]
-	topicId, data, err := topicsGroupIt.Next()
+	timestamp, topicId, data, err := topicsGroupIt.Next()
 	if err == nil {
-		heap.Push(it.heap, &message{topicId: topicId, data: data, groupIndex: item.groupIndex})
+		item.timestamp = timestamp
+		item.topicId = topicId
+		item.data = data
+		heap.Push(it.heap, item)
 	}
 	if err != io.EOF && err != nil {
-		return "", err
+		return 0, "", err
 	}
 
-	return it.topicIdToNames[item.topicId], nil
+	return retTimestamp, it.topicIdToNames[retTopicId], nil
 }
 
 func (it *MessageIterator) initLoad() error {
 	for i, topicsGroupIt := range it.topicsGroupIterators {
-		topicId, data, err := topicsGroupIt.Next()
+		timestamp, topicId, data, err := topicsGroupIt.Next()
 		if err == io.EOF {
 			continue
 		}
-		fmt.Println("initLoad err", err)
 		if err != nil {
 			return err
 		}
 
-		heap.Push(it.heap, &message{topicId: topicId, data: data, groupIndex: i})
+		heap.Push(it.heap, &message{timestamp: timestamp, topicId: topicId, data: data, groupIndex: i})
 	}
 
 	return nil
