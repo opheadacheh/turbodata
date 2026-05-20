@@ -52,6 +52,7 @@ func main() {
 		schemaIdToSchema[schema.ID] = schema
 	}
 
+	// For image topics, each topic is a group.
 	for _, channel := range info.Channels {
 		schema := schemaIdToSchema[channel.SchemaID]
 
@@ -93,8 +94,13 @@ func main() {
 		}
 	}
 
+	// For non-image topics, topics that share the same schema are grouped together.
 	schemaIdToTopic := make(map[uint16][]string)
 	for _, channel := range info.Channels {
+		if schemaIdToSchema[channel.SchemaID].Name == "foxglove.RawImage" {
+			continue
+		}
+
 		if schemaIdToTopic[channel.SchemaID] == nil {
 			schemaIdToTopic[channel.SchemaID] = make([]string, 0)
 		}
@@ -103,14 +109,41 @@ func main() {
 
 	for schemaId, topics := range schemaIdToTopic {
 		schema := schemaIdToSchema[schemaId]
-		metadata := make(map[string]any)
-		metadata["schema_encoding"] = schema.Encoding
-		metadata["schema_data"] = schema.Data
-		metadata["schema_name"] = schema.Name
-		if err := tdWriter.OpenTopics(topics, []map[string]any{metadata}, turbodata.WithCompression()); err != nil {
+		metadatas := make([]map[string]any, len(topics))
+		for i := range topics {
+			metadatas[i] = make(map[string]any)
+			metadatas[i]["schema_encoding"] = schema.Encoding
+			metadatas[i]["schema_data"] = schema.Data
+			metadatas[i]["schema_name"] = schema.Name
+		}
+		if err := tdWriter.OpenTopics(topics, metadatas, turbodata.WithCompression()); err != nil {
 			log.Fatalf("open topic: %v", err)
+		}
+
+		it, err := mcapReader.Messages(mcap.InOrder(mcap.LogTimeOrder), mcap.WithTopics(topics))
+		if err != nil {
+			log.Fatalf("failed to create mcap messages iterator: %v", err)
+		}
+
+		msg := &mcap.Message{}
+		for {
+			_, channel, _, err := it.NextInto(msg)
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				log.Fatalf("read message: %v", err)
+			}
+
+			if err := tdWriter.WriteMessage(channel.Topic, msg.Data, int64(msg.LogTime)); err != nil {
+				log.Fatalf("write message: %v", err)
+			}
+		}
+
+		if err := tdWriter.CloseTopic(); err != nil {
+			log.Fatalf("close topic: %v", err)
 		}
 	}
 
-	// log.Printf("converted %s -> %s", mcapPath, tdPath)
+	log.Printf("converted %s -> %s", mcapPath, tdPath)
 }
