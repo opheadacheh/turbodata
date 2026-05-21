@@ -10,7 +10,7 @@ type MessageIndexHeap []*messageIndexWithTopicId
 
 func (h MessageIndexHeap) Len() int { return len(h) }
 func (h MessageIndexHeap) Less(i, j int) bool {
-	return h[i].messageIndex.Timestamp < h[j].messageIndex.Timestamp
+	return h[i].messageIndex.OffsetInChunk < h[j].messageIndex.OffsetInChunk
 }
 func (h MessageIndexHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
 
