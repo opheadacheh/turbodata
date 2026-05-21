@@ -10,7 +10,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-func makeReaderFixture(t *testing.T, body []byte, compressedSummary []byte, footer *Footer) io.ReadSeeker {
+func makeReaderFixture(t *testing.T, body []byte, compressedSummary []byte, footer *Footer) ReadSource {
 	t.Helper()
 
 	if footer == nil {
@@ -206,6 +206,90 @@ func TestReaderSummary(t *testing.T) {
 			t.Errorf("expected summary parse error, got nil")
 		} else if !errors.Is(err, io.ErrUnexpectedEOF) {
 			t.Errorf("expected EOF parse error, got %v", err)
+		}
+	})
+}
+
+// countingReadSource wraps a ReadSource, counting Read/Seek/ReadAt calls so
+// tests can assert how many I/O requests summaryWithHint issues.
+type countingReadSource struct {
+	rs          ReadSource
+	ReadCalls   int
+	SeekCalls   int
+	ReadAtCalls int
+}
+
+func (c *countingReadSource) Read(p []byte) (int, error)             { c.ReadCalls++; return c.rs.Read(p) }
+func (c *countingReadSource) Seek(off int64, w int) (int64, error)   { c.SeekCalls++; return c.rs.Seek(off, w) }
+func (c *countingReadSource) ReadAt(p []byte, off int64) (int, error) { c.ReadAtCalls++; return c.rs.ReadAt(p, off) }
+
+func TestSummaryWithHint(t *testing.T) {
+	summary := &Summary{
+		TopicsInfos: []*TopicsInfo{
+			{
+				TopicMetadatas: []*TopicMetadata{
+					{Id: 1, Name: "t", Metadata: map[string]any{}},
+				},
+				TotalLen: 8,
+			},
+		},
+	}
+	compressed := makeCompressedSummary(t, summary)
+	body := make([]byte, 4096) // arbitrary body so file is larger than tail.
+
+	t.Run("hint_zero_falls_back_to_seek_read", func(t *testing.T) {
+		c := &countingReadSource{rs: makeReaderFixture(t, body, compressed, nil)}
+		reader, err := NewReader(c)
+		if err != nil {
+			t.Fatalf("NewReader: %v", err)
+		}
+		c.ReadCalls, c.SeekCalls, c.ReadAtCalls = 0, 0, 0
+
+		if _, err := reader.summaryWithHint(0); err != nil {
+			t.Fatalf("summaryWithHint(0): %v", err)
+		}
+		if c.ReadAtCalls != 0 {
+			t.Errorf("hint=0 should use Seek+Read, got ReadAtCalls=%d", c.ReadAtCalls)
+		}
+		if c.SeekCalls == 0 || c.ReadCalls == 0 {
+			t.Errorf("hint=0 should issue Seek+Read, got SeekCalls=%d ReadCalls=%d", c.SeekCalls, c.ReadCalls)
+		}
+	})
+
+	t.Run("hint_covers_summary_one_read_at", func(t *testing.T) {
+		c := &countingReadSource{rs: makeReaderFixture(t, body, compressed, nil)}
+		reader, err := NewReader(c)
+		if err != nil {
+			t.Fatalf("NewReader: %v", err)
+		}
+		c.ReadCalls, c.SeekCalls, c.ReadAtCalls = 0, 0, 0
+
+		hint := int64(len(compressed) + footerLen + 8) // covers summary + footer + slack
+		if _, err := reader.summaryWithHint(hint); err != nil {
+			t.Fatalf("summaryWithHint: %v", err)
+		}
+		if c.ReadAtCalls != 1 {
+			t.Errorf("expected exactly 1 ReadAt for prefetch hit, got %d", c.ReadAtCalls)
+		}
+		if c.ReadCalls != 0 {
+			t.Errorf("expected no Read calls on prefetch hit, got %d", c.ReadCalls)
+		}
+	})
+
+	t.Run("hint_too_small_falls_back_to_seek_read", func(t *testing.T) {
+		c := &countingReadSource{rs: makeReaderFixture(t, body, compressed, nil)}
+		reader, err := NewReader(c)
+		if err != nil {
+			t.Fatalf("NewReader: %v", err)
+		}
+		c.ReadCalls, c.SeekCalls, c.ReadAtCalls = 0, 0, 0
+
+		// Hint smaller than summary+footer → fall back path.
+		if _, err := reader.summaryWithHint(footerLen); err != nil {
+			t.Fatalf("summaryWithHint: %v", err)
+		}
+		if c.ReadCalls == 0 {
+			t.Errorf("expected fall-back Read on prefetch miss, got 0")
 		}
 	})
 }

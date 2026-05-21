@@ -2,16 +2,27 @@ package benchmark
 
 import "io"
 
-// TrackingReadSeeker wraps an io.ReadSeeker and counts reads, seeks, and bytes transferred.
-// Stats accumulate across calls; call Reset to clear them.
+// TrackingReadSeeker wraps a Read+Seek+ReadAt source and counts reads, seeks,
+// ReadAts, and bytes transferred. Stats accumulate across calls; call Reset
+// to clear them.
+//
+// Implements turbodata.ReadSource so it can be passed to the cost-aware path.
 type TrackingReadSeeker struct {
-	rs        io.ReadSeeker
-	ReadBytes int64
-	ReadCalls int64
-	SeekCalls int64
+	rs interface {
+		io.ReadSeeker
+		io.ReaderAt
+	}
+	ReadBytes   int64
+	ReadCalls   int64
+	SeekCalls   int64
+	ReadAtBytes int64
+	ReadAtCalls int64
 }
 
-func NewTrackingReadSeeker(rs io.ReadSeeker) *TrackingReadSeeker {
+func NewTrackingReadSeeker(rs interface {
+	io.ReadSeeker
+	io.ReaderAt
+}) *TrackingReadSeeker {
 	return &TrackingReadSeeker{rs: rs}
 }
 
@@ -27,10 +38,19 @@ func (t *TrackingReadSeeker) Seek(offset int64, whence int) (int64, error) {
 	return t.rs.Seek(offset, whence)
 }
 
+func (t *TrackingReadSeeker) ReadAt(p []byte, off int64) (int, error) {
+	n, err := t.rs.ReadAt(p, off)
+	t.ReadAtBytes += int64(n)
+	t.ReadAtCalls++
+	return n, err
+}
+
 func (t *TrackingReadSeeker) Reset() {
 	t.ReadBytes = 0
 	t.ReadCalls = 0
 	t.SeekCalls = 0
+	t.ReadAtBytes = 0
+	t.ReadAtCalls = 0
 }
 
 // TrackingWriter wraps an io.Writer and counts write calls and bytes transferred.
