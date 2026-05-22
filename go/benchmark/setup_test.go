@@ -44,6 +44,14 @@ var (
 	tdFilePaths map[string]string // config pair label → path to converted .td file
 	configPairs []ConfigPair
 
+	// strategyTdPath is a separate fixture used only by BenchmarkStrategy.
+	// Its shape (uncompressed image chunks, compressed non-image chunks, 4MB)
+	// is intentionally fixed: uncompressed image chunks let the cost-aware
+	// reader fetch individual messages, which is the whole point of the
+	// strategy benchmark. It does NOT participate in the existing read/write
+	// benchmarks.
+	strategyTdPath string
+
 	// Scenario parameters derived from the MCAP file.
 	imgTopicName    string   // a representative image topic
 	nonImgTopicName string   // a representative non-image topic
@@ -131,7 +139,7 @@ func setup(mcapPath string) error {
 			fi, _ := os.Stat(tdFilePaths[pair.Label])
 			fmt.Printf("td/%s: reusing existing file %s (%d bytes)\n", pair.Label, tdFilePaths[pair.Label], fi.Size())
 		}
-		return nil
+		return setupStrategyFixture(mcapPath)
 	}
 
 	if err := preloadMessages(mcapPath, info); err != nil {
@@ -147,6 +155,24 @@ func setup(mcapPath string) error {
 		fmt.Printf("td/%s: %s (%d bytes)\n", pair.Label, path, fi.Size())
 		tdFilePaths[pair.Label] = path
 	}
+	return setupStrategyFixture(mcapPath)
+}
+
+// setupStrategyFixture builds (or reuses) the .td file used by BenchmarkStrategy.
+// The fixture has uncompressed image chunks (so the cost-aware reader can
+// fetch individual messages) and compressed non-image chunks (other topics
+// are small and benefit from compression). Both sides use 4MB size-based chunks.
+func setupStrategyFixture(mcapPath string) error {
+	strategyTdPath = mcapPath + ".strategy_img4m_uncomp_nonimg4m.td"
+	if fi, err := os.Stat(strategyTdPath); err == nil {
+		fmt.Printf("td/strategy: reusing existing file %s (%d bytes)\n", strategyTdPath, fi.Size())
+		return nil
+	}
+	if err := convertMcapToTdStrategy(mcapPath, strategyTdPath); err != nil {
+		return fmt.Errorf("convert strategy fixture: %w", err)
+	}
+	fi, _ := os.Stat(strategyTdPath)
+	fmt.Printf("td/strategy: %s (%d bytes)\n", strategyTdPath, fi.Size())
 	return nil
 }
 
@@ -422,4 +448,131 @@ func writeTdFromMcap(r *mcap.Reader, info *mcap.Info, w *turbodata.Writer, pair 
 		}
 	}
 	return nil
+}
+
+// convertMcapToTdStrategy converts an MCAP file into a .td file specifically
+// shaped for BenchmarkStrategy: image topics in UNCOMPRESSED 4MB chunks,
+// non-image topics in COMPRESSED 4MB chunks. Streams the input MCAP twice (one
+// pass per side) so the input does not need to be preloaded into memory; this
+// keeps the existing all-exist fast path independent of preloadMessages.
+func convertMcapToTdStrategy(mcapPath, tdPath string) error {
+	const chunkSize = 4 << 20
+
+	in, err := os.Open(mcapPath)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	r, err := mcap.NewReader(in)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	info, err := r.Info()
+	if err != nil {
+		return err
+	}
+
+	out, err := os.Create(tdPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	w := turbodata.NewWriter(out)
+	chunkCfg := &turbodata.ChunkConfig{Mode: turbodata.ChunkThresholdModeSize, Size: chunkSize}
+	schemaByID := info.Schemas
+
+	// Image topics: one group per channel, UNCOMPRESSED chunks.
+	for _, ch := range info.Channels {
+		schema := schemaByID[ch.SchemaID]
+		if schema.Name != "foxglove.RawImage" {
+			continue
+		}
+		meta := map[string]any{
+			"schema_encoding": schema.Encoding,
+			"schema_data":     schema.Data,
+			"schema_name":     schema.Name,
+		}
+		// No WithCompression() here — uncompressed chunks let the cost-aware
+		// reader fetch individual messages by byte range.
+		if err := w.OpenTopics(
+			[]string{ch.Topic},
+			[]map[string]any{meta},
+			turbodata.WithChunkConfig(chunkCfg),
+		); err != nil {
+			return err
+		}
+		it, err := r.Messages(mcap.InOrder(mcap.LogTimeOrder), mcap.WithTopics([]string{ch.Topic}))
+		if err != nil {
+			return err
+		}
+		msg := &mcap.Message{}
+		for {
+			_, _, _, err := it.NextInto(msg)
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return err
+			}
+			if err := w.WriteMessage(ch.Topic, msg.Data, int64(msg.LogTime)); err != nil {
+				return err
+			}
+		}
+		if err := w.CloseTopic(); err != nil {
+			return err
+		}
+	}
+
+	// Non-image topics: grouped by schema ID, COMPRESSED chunks.
+	schemaIdToTopics := make(map[uint16][]string)
+	for _, ch := range info.Channels {
+		if schemaByID[ch.SchemaID].Name == "foxglove.RawImage" {
+			continue
+		}
+		schemaIdToTopics[ch.SchemaID] = append(schemaIdToTopics[ch.SchemaID], ch.Topic)
+	}
+	for schemaID, topics := range schemaIdToTopics {
+		schema := schemaByID[schemaID]
+		metadatas := make([]map[string]any, len(topics))
+		for i := range topics {
+			metadatas[i] = map[string]any{
+				"schema_encoding": schema.Encoding,
+				"schema_data":     schema.Data,
+				"schema_name":     schema.Name,
+			}
+		}
+		if err := w.OpenTopics(
+			topics,
+			metadatas,
+			turbodata.WithCompression(),
+			turbodata.WithChunkConfig(chunkCfg),
+		); err != nil {
+			return err
+		}
+		it, err := r.Messages(mcap.InOrder(mcap.LogTimeOrder), mcap.WithTopics(topics))
+		if err != nil {
+			return err
+		}
+		msg := &mcap.Message{}
+		for {
+			_, ch, _, err := it.NextInto(msg)
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return err
+			}
+			if err := w.WriteMessage(ch.Topic, msg.Data, int64(msg.LogTime)); err != nil {
+				return err
+			}
+		}
+		if err := w.CloseTopic(); err != nil {
+			return err
+		}
+	}
+	return w.Close()
 }

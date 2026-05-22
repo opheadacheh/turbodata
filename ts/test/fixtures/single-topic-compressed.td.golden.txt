@@ -1,0 +1,6 @@
+topics:1
+topic 1 /sensor {"description":"compressed sensor","is_compressed":true}
+messages:30
+stream-sha256:4b8a5d678feb0ee5dbcefb088e0c26d909c9c4186d7713fd41f3b5a79db9af50
+first 2000000 /sensor 26fc9fbadd5a1705727b7d278fb406e2e2562707a4ce1e72c5f6aa489b7cd710
+last 2029000 /sensor 895c7845c9825a739e15a6c128e2610e584593c4b73e7b0c7e04643635fb1d1f

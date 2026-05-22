@@ -1,0 +1,8 @@
+topics:3
+topic 1 /cam {"channel":"cam","is_compressed":true,"rate":30}
+topic 2 /imu {"channel":"imu","is_compressed":true,"rate":200}
+topic 3 /lidar {"channel":"lidar","is_compressed":true}
+messages:36
+stream-sha256:5e41629d5b3588f97b4683b68274bdec4ad223ef4ca1cd21331615bddb9073ac
+first 3000000 /cam 0736d6039bffa38b2b6f89f2f22fc28c76e8624820777e0f9b6e7ff4a1c7bb52
+last 3003500 /lidar 3120a2acdf9d85d070c69311763bba3f7a76b40e8ecb76f7c5f59166e3259bf6

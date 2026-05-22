@@ -140,3 +140,91 @@ go test ./benchmark/ -bench=BenchmarkWrite -args -mcap=...
 # One specific TD config
 go test ./benchmark/ -bench='td/img1m_nonimg1m' -args -mcap=...
 ```
+
+## Strategy Benchmark
+
+`BenchmarkStrategy` measures the IO advantage of `WithReadStrategy()` against the
+default TD reader and an MCAP reference, under synthetic network latency. It
+isolates the read-side effect of strategy choice — chunk coalescing and parallel
+`ReadAt` — from compression and chunk-config noise.
+
+### Fixture
+
+The benchmark uses a separate `.td` file (`<input>.strategy_img4m_uncomp_nonimg4m.td`)
+built once on first run:
+
+- Image topics: **uncompressed**, 4 MB chunks.  Uncompressed chunks let the
+  cost-aware reader fetch individual messages by byte range; this is the whole
+  point of the benchmark.
+- Non-image topics: compressed, 4 MB chunks.
+
+Because real-world image data is typically pre-compressed (JPEG / H.264 / ...),
+compressing TD chunks again adds little. Use the `mcap-mock-compress` tool below
+to convert a raw-image MCAP into a fixture that mimics this shape.
+
+### Sub-benchmark axes
+
+`{scenario}/{variant}/{rtt}`:
+
+| Axis | Values | Notes |
+|------|--------|-------|
+| scenario | `all`, `img`, `range` | full scan / one image topic / 5 topics in middle-third window |
+| variant | `mcap`, `td_default`, `td_latency_serial`, `td_latency_parallel`, `td_money` | see below |
+| rtt | `0ms`, `1ms`, `10ms` | injected on every Read / ReadAt |
+
+Latency model: each `Read` or `ReadAt` sleeps `rtt + n / 100MB/s`. `Seek` is free
+(real object stores have no Seek; cost is charged at the next Read).
+
+| Variant | Strategy |
+|---------|----------|
+| `mcap` | MCAP indexed reader, latency-wrapped (reference baseline) |
+| `td_default` | No `WithReadStrategy()` — raw `Read` + `Seek` path |
+| `td_latency_serial` | `StrategyForLatency(rtt, 100MB/s, 1)` — coalesces and splits at the bandwidth-latency product, single in-flight read |
+| `td_latency_parallel` | `StrategyForLatency(rtt, 100MB/s, 8)` — same as serial, up to 8 in-flight reads |
+| `td_money` | `StrategyForMoney(0.0004, 0, 1)` — free egress, infinite coalesce, no split |
+
+### Running
+
+```bash
+go test ./benchmark/ -bench=BenchmarkStrategy -benchmem -count=5 \
+    -benchtime=2s -timeout=60m \
+    -args -mcap=/path/to/mock_compressed.mcap
+```
+
+Higher RTT × higher b.N can take a long time; pin `-benchtime` and `-count`
+explicitly. Wall-clock dominates over CPU at non-zero RTT, so `-cpu` flags
+have little effect.
+
+### Generating a mock-compressed fixture
+
+If your input MCAP stores images in raw RGB (`foxglove.RawImage`), the chunk
+compressor will hide the per-message read advantage. Convert it first:
+
+```bash
+go run ./benchmark/cmd/mcap-mock-compress \
+    -in  raw_images.mcap \
+    -out mock_compressed.mcap \
+    -size 60KB
+```
+
+This rewrites every `foxglove.RawImage` payload as 60 KB of pseudo-random bytes
+(incompressible, mimicking JPEG / H.264 codec output). All other messages,
+schemas, channels, attachments, and metadata are passed through unchanged.
+
+> **Note:** The output is not a valid `foxglove.RawImage` stream — payload size
+> no longer matches `width * height * channels`. It is a benchmark fixture, not
+> a Foxglove Studio replay file.
+
+### Selecting strategy sub-benchmarks
+
+```bash
+# Strategy benchmark only
+go test ./benchmark/ -bench=BenchmarkStrategy -args -mcap=...
+
+# One scenario at one RTT
+go test ./benchmark/ -bench='Strategy/img/.*/10ms' -args -mcap=...
+
+# One specific variant at one RTT
+go test ./benchmark/ -bench='Strategy/img/td_latency_parallel/10ms' -args -mcap=...
+```
+
