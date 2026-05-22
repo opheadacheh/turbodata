@@ -3,7 +3,6 @@ package turbodata
 import (
 	"bytes"
 	"errors"
-	"io"
 	"testing"
 )
 
@@ -12,13 +11,6 @@ type errWriter struct{}
 
 func (e *errWriter) Write(p []byte) (int, error) {
 	return 0, errors.New("injected write error")
-}
-
-// testMsg holds the fields returned by MessageIterator.NextInto.
-type testMsg struct {
-	ts   int64
-	name string
-	data []byte
 }
 
 // mustOpenTopics calls OpenTopics and fatals on error.
@@ -51,43 +43,6 @@ func mustClose(t *testing.T, w *Writer) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-}
-
-// writerRoundTrip runs setup against a Writer, then returns a Reader over the result.
-func writerRoundTrip(t *testing.T, setup func(*Writer)) *Reader {
-	t.Helper()
-	buf := &bytes.Buffer{}
-	w := NewWriter(buf)
-	setup(w)
-	r, err := NewReader(bytes.NewReader(buf.Bytes()))
-	if err != nil {
-		t.Fatalf("NewReader: %v", err)
-	}
-	return r
-}
-
-// collectMessages drains a Reader into a slice of testMsgs.
-func collectMessages(t *testing.T, r *Reader) []testMsg {
-	t.Helper()
-	it, err := r.ReadMessages()
-	if err != nil {
-		t.Fatalf("ReadMessages: %v", err)
-	}
-	rb := NewReusableBuffer()
-	var msgs []testMsg
-	for {
-		ts, name, err := it.NextInto(rb)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			t.Fatalf("NextInto: %v", err)
-		}
-		d := make([]byte, len(rb.Data))
-		copy(d, rb.Data)
-		msgs = append(msgs, testMsg{ts, name, d})
-	}
-	return msgs
 }
 
 // ---- NewWriter ----
@@ -490,7 +445,7 @@ func TestRoundTrip(t *testing.T) {
 			t.Errorf("topic name mismatch: got %q", summary.TopicsInfos[0].TopicMetadatas[0].Name)
 		}
 
-		msgs := collectMessages(t, r)
+		msgs := collect(t, r)
 		if len(msgs) != 1 {
 			t.Fatalf("expected 1 message, got %d", len(msgs))
 		}
@@ -513,7 +468,7 @@ func TestRoundTrip(t *testing.T) {
 			mustClose(t, w)
 		})
 
-		msgs := collectMessages(t, r)
+		msgs := collect(t, r)
 		if len(msgs) != 3 {
 			t.Fatalf("expected 3 messages, got %d", len(msgs))
 		}
@@ -536,7 +491,7 @@ func TestRoundTrip(t *testing.T) {
 			mustClose(t, w)
 		})
 
-		msgs := collectMessages(t, r)
+		msgs := collect(t, r)
 		if len(msgs) != 3 {
 			t.Fatalf("expected 3 messages, got %d", len(msgs))
 		}
@@ -559,7 +514,7 @@ func TestRoundTrip(t *testing.T) {
 			mustClose(t, w)
 		})
 
-		msgs := collectMessages(t, r)
+		msgs := collect(t, r)
 		if len(msgs) != 3 {
 			t.Fatalf("expected 3 messages, got %d", len(msgs))
 		}
@@ -591,7 +546,7 @@ func TestRoundTrip(t *testing.T) {
 			t.Fatalf("expected 2 topic metadatas, got %d", len(summary.TopicsInfos[0].TopicMetadatas))
 		}
 
-		msgs := collectMessages(t, r)
+		msgs := collect(t, r)
 		if len(msgs) != 2 {
 			t.Fatalf("expected 2 messages, got %d", len(msgs))
 		}
@@ -626,7 +581,7 @@ func TestRoundTrip(t *testing.T) {
 			mustClose(t, w)
 		})
 
-		msgs := collectMessages(t, r)
+		msgs := collect(t, r)
 		if len(msgs) != 1 {
 			t.Fatalf("expected 1 message, got %d", len(msgs))
 		}

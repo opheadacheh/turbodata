@@ -17,7 +17,7 @@ func TestTopicsGroupIterator_IntraGroupTopicFilter(t *testing.T) {
 		mustClose(t, w)
 	})
 
-	msgs := collectWithOpts(t, r, WithTopicNames([]string{"a"}))
+	msgs := collect(t, r, WithTopicNames([]string{"a"}))
 	if len(msgs) != 2 {
 		t.Fatalf("expected 2 messages for topic a, got %d", len(msgs))
 	}
@@ -53,7 +53,7 @@ func TestTopicsGroupIterator_PerMessageTimestampFilter(t *testing.T) {
 		mustClose(t, w)
 	})
 
-	msgs := collectWithOpts(t, r, WithStartTimestamp(10), WithEndTimestamp(20))
+	msgs := collect(t, r, WithStartTimestamp(10), WithEndTimestamp(20))
 	if len(msgs) != 2 {
 		t.Fatalf("expected 2 messages (ts=10,20), got %d", len(msgs))
 	}
@@ -81,7 +81,7 @@ func TestTopicsGroupIterator_EmptyChunkAfterFilter(t *testing.T) {
 		mustClose(t, w)
 	})
 
-	msgs := collectWithOpts(t, r, WithStartTimestamp(100))
+	msgs := collect(t, r, WithStartTimestamp(100))
 	if len(msgs) != 2 {
 		t.Fatalf("expected 2 messages (ts=100,200), got %d", len(msgs))
 	}
@@ -106,7 +106,7 @@ func TestTopicsGroupIterator_CompressedData(t *testing.T) {
 		mustClose(t, w)
 	})
 
-	msgs := collectWithOpts(t, r)
+	msgs := collect(t, r)
 	if len(msgs) != 3 {
 		t.Fatalf("expected 3 messages, got %d", len(msgs))
 	}

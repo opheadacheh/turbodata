@@ -2,8 +2,6 @@ package turbodata
 
 import (
 	"bytes"
-	"errors"
-	"io"
 	"math"
 	"sync/atomic"
 	"testing"
@@ -68,43 +66,11 @@ func (t *trackingSource) ReadAt(p []byte, off int64) (int, error) {
 	return n, err
 }
 
-func roundTripWithTracking(t *testing.T, setup func(*Writer)) (*bytes.Reader, []byte) {
-	t.Helper()
-	buf := &bytes.Buffer{}
-	w := NewWriter(buf)
-	setup(w)
-	data := buf.Bytes()
-	return bytes.NewReader(data), data
-}
-
-func collectFromReader(t *testing.T, r *Reader, opts ...ReadOption) []testMsg {
-	t.Helper()
-	it, err := r.ReadMessages(opts...)
-	if err != nil {
-		t.Fatalf("ReadMessages: %v", err)
-	}
-	rb := NewReusableBuffer()
-	var out []testMsg
-	for {
-		ts, name, err := it.NextInto(rb)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			t.Fatalf("NextInto: %v", err)
-		}
-		d := make([]byte, len(rb.Data))
-		copy(d, rb.Data)
-		out = append(out, testMsg{ts, name, d})
-	}
-	return out
-}
-
 // TestDefaultPathRegressionGuard verifies that without WithReadStrategy, the
 // reader still uses Seek+Read exclusively and doesn't accidentally touch
 // ReadAt (which would indicate the cost-aware path leaked into the default).
 func TestDefaultPathRegressionGuard(t *testing.T) {
-	bodyReader, _ := roundTripWithTracking(t, func(w *Writer) {
+	raw := buildFile(t, func(w *Writer) {
 		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}})
 		mustWriteMessage(t, w, "cam", []byte("frame0"), 10)
 		mustWriteMessage(t, w, "cam", []byte("frame1"), 20)
@@ -112,12 +78,12 @@ func TestDefaultPathRegressionGuard(t *testing.T) {
 		mustCloseTopic(t, w)
 		mustClose(t, w)
 	})
-	tracking := newTrackingSource(bodyReader)
+	tracking := newTrackingSource(bytes.NewReader(raw))
 	r, err := NewReader(tracking)
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	out := collectFromReader(t, r)
+	out := collect(t, r)
 	if len(out) != 3 {
 		t.Fatalf("len=%d", len(out))
 	}
@@ -147,19 +113,19 @@ func TestCostAwareSemanticEquivalence(t *testing.T) {
 		mustClose(t, w)
 	}
 
-	rsDefault, raw := roundTripWithTracking(t, build)
-	r1, err := NewReader(rsDefault)
+	raw := buildFile(t, build)
+	r1, err := NewReader(bytes.NewReader(raw))
 	if err != nil {
 		t.Fatalf("NewReader default: %v", err)
 	}
-	want := collectFromReader(t, r1)
+	want := collect(t, r1)
 
 	r2, err := NewReader(bytes.NewReader(raw))
 	if err != nil {
 		t.Fatalf("NewReader cost-aware: %v", err)
 	}
 	strat := ReadStrategy{CoalesceGap: 1 << 20, SplitThreshold: math.MaxInt64, MaxConcurrency: 4}
-	got := collectFromReader(t, r2, WithReadStrategy(strat))
+	got := collect(t, r2, WithReadStrategy(strat))
 
 	if len(got) != len(want) {
 		t.Fatalf("count mismatch: cost-aware=%d default=%d", len(got), len(want))
@@ -182,18 +148,18 @@ func TestCostAwareSemanticEquivalenceReverse(t *testing.T) {
 		mustCloseTopic(t, w)
 		mustClose(t, w)
 	}
-	rsDefault, raw := roundTripWithTracking(t, build)
-	r1, err := NewReader(rsDefault)
+	raw := buildFile(t, build)
+	r1, err := NewReader(bytes.NewReader(raw))
 	if err != nil {
 		t.Fatalf("NewReader default: %v", err)
 	}
-	want := collectFromReader(t, r1, WithOrder(ReverseTimeOrder))
+	want := collect(t, r1, WithOrder(ReverseTimeOrder))
 
 	r2, err := NewReader(bytes.NewReader(raw))
 	if err != nil {
 		t.Fatalf("NewReader cost-aware: %v", err)
 	}
-	got := collectFromReader(t, r2, WithOrder(ReverseTimeOrder), WithReadStrategy(ReadStrategy{CoalesceGap: 1 << 20, SplitThreshold: math.MaxInt64, MaxConcurrency: 2}))
+	got := collect(t, r2, WithOrder(ReverseTimeOrder), WithReadStrategy(ReadStrategy{CoalesceGap: 1 << 20, SplitThreshold: math.MaxInt64, MaxConcurrency: 2}))
 
 	if len(got) != len(want) {
 		t.Fatalf("count mismatch: cost-aware=%d default=%d", len(got), len(want))
@@ -227,14 +193,14 @@ func TestSelectiveUncompressedBytesSavings(t *testing.T) {
 		mustClose(t, w)
 	}
 
-	rsDefault, raw := roundTripWithTracking(t, build)
+	raw := buildFile(t, build)
 
-	trkDefault := newTrackingSource(rsDefault)
+	trkDefault := newTrackingSource(bytes.NewReader(raw))
 	rDef, err := NewReader(trkDefault)
 	if err != nil {
 		t.Fatalf("NewReader default: %v", err)
 	}
-	defaultOut := collectFromReader(t, rDef, WithTopicNames([]string{"kept"}))
+	defaultOut := collect(t, rDef, WithTopicNames([]string{"kept"}))
 
 	trkCost := newTrackingSource(bytes.NewReader(raw))
 	rCost, err := NewReader(trkCost)
@@ -242,7 +208,7 @@ func TestSelectiveUncompressedBytesSavings(t *testing.T) {
 		t.Fatalf("NewReader cost-aware: %v", err)
 	}
 	strat := ReadStrategy{CoalesceGap: 0, SplitThreshold: math.MaxInt64, MaxConcurrency: 4}
-	costOut := collectFromReader(t, rCost, WithTopicNames([]string{"kept"}), WithReadStrategy(strat))
+	costOut := collect(t, rCost, WithTopicNames([]string{"kept"}), WithReadStrategy(strat))
 
 	if len(defaultOut) != 3 || len(costOut) != 3 {
 		t.Fatalf("expected 3 kept messages on both paths; default=%d cost=%d", len(defaultOut), len(costOut))
@@ -277,7 +243,7 @@ func TestCostAwareParallelism(t *testing.T) {
 		mustCloseTopic(t, w)
 		mustClose(t, w)
 	}
-	_, raw := roundTripWithTracking(t, build)
+	raw := buildFile(t, build)
 	// In-memory ReadAts complete in nanoseconds, so workers don't overlap
 	// observably without a small per-call delay. Slow each ReadAt by 5ms so
 	// the parallelism is visible.
@@ -290,7 +256,7 @@ func TestCostAwareParallelism(t *testing.T) {
 	// CoalesceGap=0 keeps each chunk in its own op; concurrency=8 lets the
 	// fetcher actually fan out.
 	strat := ReadStrategy{CoalesceGap: 0, SplitThreshold: math.MaxInt64, MaxConcurrency: 8}
-	out := collectFromReader(t, r, WithReadStrategy(strat))
+	out := collect(t, r, WithReadStrategy(strat))
 	if len(out) != 32 {
 		t.Fatalf("len=%d", len(out))
 	}
@@ -315,14 +281,14 @@ func TestCostAwareWithTopicAndTimeFilters(t *testing.T) {
 		mustCloseTopic(t, w)
 		mustClose(t, w)
 	}
-	_, raw := roundTripWithTracking(t, build)
+	raw := buildFile(t, build)
 
 	r1, _ := NewReader(bytes.NewReader(raw))
 	wantOpts := []ReadOption{WithTopicNames([]string{"a"}), WithStartTimestamp(20), WithEndTimestamp(40)}
-	want := collectFromReader(t, r1, wantOpts...)
+	want := collect(t, r1, wantOpts...)
 
 	r2, _ := NewReader(bytes.NewReader(raw))
-	got := collectFromReader(t, r2, append(wantOpts, WithReadStrategy(ReadStrategy{CoalesceGap: 1 << 20, SplitThreshold: math.MaxInt64, MaxConcurrency: 4}))...)
+	got := collect(t, r2, append(wantOpts, WithReadStrategy(ReadStrategy{CoalesceGap: 1 << 20, SplitThreshold: math.MaxInt64, MaxConcurrency: 4}))...)
 
 	if len(want) != len(got) || len(want) != 3 {
 		t.Fatalf("counts mismatch want=%d got=%d", len(want), len(got))

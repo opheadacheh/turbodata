@@ -6,30 +6,6 @@ import (
 	"testing"
 )
 
-// collectWithOpts drains a Reader into a slice of testMsgs using the given ReadOptions.
-func collectWithOpts(t *testing.T, r *Reader, opts ...ReadOption) []testMsg {
-	t.Helper()
-	it, err := r.ReadMessages(opts...)
-	if err != nil {
-		t.Fatalf("ReadMessages: %v", err)
-	}
-	rb := NewReusableBuffer()
-	var msgs []testMsg
-	for {
-		ts, name, err := it.NextInto(rb)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			t.Fatalf("NextInto: %v", err)
-		}
-		d := make([]byte, len(rb.Data))
-		copy(d, rb.Data)
-		msgs = append(msgs, testMsg{ts, name, d})
-	}
-	return msgs
-}
-
 func TestNextIntoEmpty(t *testing.T) {
 	r := writerRoundTrip(t, func(w *Writer) {
 		mustClose(t, w)
@@ -56,7 +32,7 @@ func TestNextIntoSingleTopicOrder(t *testing.T) {
 		mustClose(t, w)
 	})
 
-	msgs := collectWithOpts(t, r)
+	msgs := collect(t, r)
 	if len(msgs) != 3 {
 		t.Fatalf("expected 3 messages, got %d", len(msgs))
 	}
@@ -92,7 +68,7 @@ func TestNextIntoMultiTopicMerge(t *testing.T) {
 		mustClose(t, w)
 	})
 
-	msgs := collectWithOpts(t, r)
+	msgs := collect(t, r)
 	if len(msgs) != 4 {
 		t.Fatalf("expected 4 messages, got %d", len(msgs))
 	}
@@ -128,7 +104,7 @@ func TestNextIntoReverseOrder(t *testing.T) {
 		mustClose(t, w)
 	})
 
-	msgs := collectWithOpts(t, r, WithOrder(ReverseTimeOrder))
+	msgs := collect(t, r, WithOrder(ReverseTimeOrder))
 	if len(msgs) != 4 {
 		t.Fatalf("expected 4 messages, got %d", len(msgs))
 	}
@@ -155,7 +131,7 @@ func TestNextIntoTopicNameFilter(t *testing.T) {
 		mustClose(t, w)
 	})
 
-	msgs := collectWithOpts(t, r, WithTopicNames([]string{"topic_a"}))
+	msgs := collect(t, r, WithTopicNames([]string{"topic_a"}))
 	if len(msgs) != 2 {
 		t.Fatalf("expected 2 messages for topic_a, got %d", len(msgs))
 	}
@@ -181,7 +157,7 @@ func TestNextIntoTimestampRange(t *testing.T) {
 		mustClose(t, w)
 	})
 
-	msgs := collectWithOpts(t, r, WithStartTimestamp(20), WithEndTimestamp(40))
+	msgs := collect(t, r, WithStartTimestamp(20), WithEndTimestamp(40))
 	if len(msgs) != 3 {
 		t.Fatalf("expected 3 messages (ts=20,30,40), got %d", len(msgs))
 	}
@@ -205,7 +181,7 @@ func TestNextIntoMultipleChunks(t *testing.T) {
 		mustClose(t, w)
 	})
 
-	msgs := collectWithOpts(t, r)
+	msgs := collect(t, r)
 	if len(msgs) != 5 {
 		t.Fatalf("expected 5 messages, got %d", len(msgs))
 	}
@@ -235,7 +211,7 @@ func TestNextIntoMultiGroupMerge(t *testing.T) {
 		mustClose(t, w)
 	})
 
-	msgs := collectWithOpts(t, r)
+	msgs := collect(t, r)
 	if len(msgs) != 5 {
 		t.Fatalf("expected 5 messages, got %d", len(msgs))
 	}
