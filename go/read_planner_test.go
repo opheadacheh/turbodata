@@ -71,22 +71,6 @@ func TestPlanCoalesceTable(t *testing.T) {
 				{OpIndex: 0, InOpOff: 10, Length: 5},
 			},
 		},
-		{
-			name:        "out of order input gets sorted",
-			ranges:      []Range{{Offset: 100, Length: 10}, {Offset: 0, Length: 10}, {Offset: 50, Length: 10}},
-			coalesceGap: 1,
-			wantOps: []ReadOp{
-				{Offset: 0, Length: 10},
-				{Offset: 50, Length: 10},
-				{Offset: 100, Length: 10},
-			},
-			wantLocs: []RangeLocation{
-				// locs is parallel to original input order.
-				{OpIndex: 2, InOpOff: 0, Length: 10},
-				{OpIndex: 0, InOpOff: 0, Length: 10},
-				{OpIndex: 1, InOpOff: 0, Length: 10},
-			},
-		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

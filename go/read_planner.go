@@ -1,7 +1,5 @@
 package turbodata
 
-import "sort"
-
 // Range is a single atomic byte range requested by the caller. After planning,
 // each input range lives entirely inside exactly one ReadOp.
 type Range struct {
@@ -31,10 +29,14 @@ type RangeLocation struct {
 // is parallel to the input ranges: locations[i] tells where ranges[i] lives in
 // the produced ops.
 //
+// Precondition: ranges must be in non-decreasing Offset order. Callers in this
+// package satisfy this by construction (the writer lays out groups and chunks
+// in increasing file offset, and range builders walk them in the same order).
+// Behavior is undefined if this precondition is violated.
+//
 // Algorithm:
-//  1. Sort ranges by Offset, remembering original indices.
-//  2. Coalesce: merge adjacent ranges whose gap is < CoalesceGap.
-//  3. Split: a merged op whose length exceeds SplitThreshold is sliced at
+//  1. Coalesce: merge adjacent ranges whose gap is < CoalesceGap.
+//  2. Split: a merged op whose length exceeds SplitThreshold is sliced at
 //     internal range boundaries via greedy packing. A single range larger
 //     than SplitThreshold stays as one oversize op — atomic units are never
 //     broken.
@@ -44,15 +46,6 @@ func Plan(ranges []Range, s ReadStrategy) (ops []ReadOp, locations []RangeLocati
 		return nil, locations
 	}
 
-	// Sort by offset while remembering original indices.
-	sorted := make([]int, len(ranges))
-	for i := range sorted {
-		sorted[i] = i
-	}
-	sort.SliceStable(sorted, func(i, j int) bool {
-		return ranges[sorted[i]].Offset < ranges[sorted[j]].Offset
-	})
-
 	// Coalesce pass: produce groups of original indices, each group becoming
 	// a single contiguous read at this stage.
 	type group struct {
@@ -61,8 +54,7 @@ func Plan(ranges []Range, s ReadStrategy) (ops []ReadOp, locations []RangeLocati
 		members []int // indices into ranges, in offset order
 	}
 	groups := make([]group, 0, len(ranges))
-	for _, idx := range sorted {
-		r := ranges[idx]
+	for idx, r := range ranges {
 		if len(groups) == 0 {
 			groups = append(groups, group{
 				offset:  r.Offset,

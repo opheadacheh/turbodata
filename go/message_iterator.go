@@ -182,6 +182,9 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 			rangeMetaA = append(rangeMetaA, rangeAssign{groupIdx: gi, chunkIdx: ci})
 		}
 	}
+	// rangesA is offset-sorted by construction: the writer lays out groups
+	// in summary order and each group's index chunks in append order, both
+	// at monotonically increasing file offsets. Plan requires this.
 	opsA, locA := Plan(rangesA, strategy)
 	bufsA, err := fetcher.Execute(ctx, opsA)
 	if err != nil {
@@ -196,15 +199,18 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 		messageLens   []int64
 	}
 	perGroupChunks := make([][]decodedChunk, len(scoped))
+	// Reused across all index chunks: ReadIndexChunk + sortAndFilter copy
+	// every value they need out of the decompressed bytes (no aliasing into
+	// the buffer), so a single scratch buffer suffices.
+	indexDecompressBuf := NewReusableBuffer()
 	for gi, g := range scoped {
 		perGroupChunks[gi] = make([]decodedChunk, len(g.filteredInfos))
 		for ci, info := range g.filteredInfos {
 			raw := loadedIndex.Get(info.Offset)
-			decompressed, err := decompress(raw)
-			if err != nil {
+			if err := decompressInto(raw, indexDecompressBuf); err != nil {
 				return err
 			}
-			ic, err := ReadIndexChunk(bytes.NewReader(decompressed))
+			ic, err := ReadIndexChunk(bytes.NewReader(indexDecompressBuf.Data))
 			if err != nil {
 				return err
 			}
@@ -214,17 +220,11 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 	}
 
 	// ---- Phase B: plan + fetch data ranges, chunk-level for compressed,
-	// message-level for uncompressed (with on-the-fly contiguous merging).
-	// For each message we register both its run and its individual offset,
-	// so the iterator can look up the message directly.
-	type msgRunRef struct {
-		msgOffset int64
-		msgLen    int64
-		runIdx    int   // index into rangesB
-		inRunOff  int64 // byte offset within the run
-	}
+	// message-level for uncompressed. We register every kept message as its
+	// own Range; Plan coalesces contiguous (and near-contiguous, per
+	// strategy.CoalesceGap) messages into single ReadOps, and NewLoadedBytes
+	// indexes each message offset individually for direct lookup.
 	var rangesB []Range
-	var msgRefs []msgRunRef // populated for uncompressed groups
 	for gi, g := range scoped {
 		if g.isCompressed {
 			for _, dc := range perGroupChunks[gi] {
@@ -238,80 +238,24 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 			}
 			continue
 		}
-		// Uncompressed: emit one range per contiguous run of kept messages,
-		// recording each message's location inside its run for later lookup
-		// in the LoadedBytes index.
 		for _, dc := range perGroupChunks[gi] {
-			if len(dc.messages) == 0 {
-				continue
-			}
-			runStart := dc.indexChunk.ChunkOffset + dc.messages[0].OffsetInChunk
-			runEnd := runStart + dc.messageLens[0]
-			runIdx := len(rangesB)
-			msgRefs = append(msgRefs, msgRunRef{
-				msgOffset: runStart,
-				msgLen:    dc.messageLens[0],
-				runIdx:    runIdx,
-				inRunOff:  0,
-			})
-			for k := 1; k < len(dc.messages); k++ {
-				msgStart := dc.indexChunk.ChunkOffset + dc.messages[k].OffsetInChunk
-				if msgStart == runEnd {
-					// Same run; record this message's location within it.
-					msgRefs = append(msgRefs, msgRunRef{
-						msgOffset: msgStart,
-						msgLen:    dc.messageLens[k],
-						runIdx:    runIdx,
-						inRunOff:  msgStart - runStart,
-					})
-					runEnd += dc.messageLens[k]
-					continue
-				}
-				// Close the current run, start a new one.
-				rangesB = append(rangesB, Range{Offset: runStart, Length: runEnd - runStart})
-				runStart = msgStart
-				runEnd = runStart + dc.messageLens[k]
-				runIdx = len(rangesB)
-				msgRefs = append(msgRefs, msgRunRef{
-					msgOffset: msgStart,
-					msgLen:    dc.messageLens[k],
-					runIdx:    runIdx,
-					inRunOff:  0,
+			for k, msg := range dc.messages {
+				rangesB = append(rangesB, Range{
+					Offset: dc.indexChunk.ChunkOffset + msg.OffsetInChunk,
+					Length: dc.messageLens[k],
 				})
 			}
-			rangesB = append(rangesB, Range{Offset: runStart, Length: runEnd - runStart})
 		}
 	}
+	// rangesB is offset-sorted by construction: data chunks (and messages
+	// within them) are appended in writer order, which is increasing file
+	// offset. Plan requires this.
 	opsB, locB := Plan(rangesB, strategy)
 	bufsB, err := fetcher.Execute(ctx, opsB)
 	if err != nil {
 		return err
 	}
 	loadedData := NewLoadedBytes(rangesB, locB, bufsB)
-
-	// For uncompressed groups: widen the LoadedBytes index so each kept
-	// message has its own (offset → bytes) entry, sub-located inside its run.
-	for _, mr := range msgRefs {
-		if _, ok := loadedData.index[mr.msgOffset]; ok {
-			// First message of each run already gets the run's entry, which
-			// has the correct length only by coincidence when the run is one
-			// message. Override unconditionally to ensure length matches the
-			// individual message.
-			runLoc := locB[mr.runIdx]
-			loadedData.index[mr.msgOffset] = bytesLocation{
-				bufferIdx: runLoc.OpIndex,
-				inBufOff:  runLoc.InOpOff + int(mr.inRunOff),
-				length:    int(mr.msgLen),
-			}
-			continue
-		}
-		runLoc := locB[mr.runIdx]
-		loadedData.index[mr.msgOffset] = bytesLocation{
-			bufferIdx: runLoc.OpIndex,
-			inBufOff:  runLoc.InOpOff + int(mr.inRunOff),
-			length:    int(mr.msgLen),
-		}
-	}
 
 	// ---- Build a costAwareGroupIterator per scoped group.
 	it.costAwareGroups = make([]*costAwareGroupIterator, 0, len(scoped))

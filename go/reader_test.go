@@ -70,7 +70,11 @@ func TestNewReader(t *testing.T) {
 			SummaryLen: int64(len(validCompressed)),
 			Magic:      [5]byte{'B', 'A', 'D', '!', '!'},
 		})
-		_, err := NewReader(rs)
+		reader, err := NewReader(rs)
+		if err != nil {
+			t.Fatalf("NewReader: %v", err)
+		}
+		_, err = reader.Summary()
 		if err == nil {
 			t.Errorf("expected invalid magic error, got nil")
 		} else if !strings.Contains(err.Error(), "invalid magic number") {
@@ -79,7 +83,11 @@ func TestNewReader(t *testing.T) {
 	})
 
 	t.Run("truncated_input", func(t *testing.T) {
-		_, err := NewReader(bytes.NewReader([]byte{0x01, 0x02}))
+		reader, err := NewReader(bytes.NewReader([]byte{0x01, 0x02}))
+		if err != nil {
+			t.Fatalf("NewReader: %v", err)
+		}
+		_, err = reader.Summary()
 		if err == nil {
 			t.Errorf("expected error for input shorter than footer, got nil")
 		}
@@ -219,9 +227,15 @@ type countingReadSource struct {
 	ReadAtCalls int
 }
 
-func (c *countingReadSource) Read(p []byte) (int, error)             { c.ReadCalls++; return c.rs.Read(p) }
-func (c *countingReadSource) Seek(off int64, w int) (int64, error)   { c.SeekCalls++; return c.rs.Seek(off, w) }
-func (c *countingReadSource) ReadAt(p []byte, off int64) (int, error) { c.ReadAtCalls++; return c.rs.ReadAt(p, off) }
+func (c *countingReadSource) Read(p []byte) (int, error) { c.ReadCalls++; return c.rs.Read(p) }
+func (c *countingReadSource) Seek(off int64, w int) (int64, error) {
+	c.SeekCalls++
+	return c.rs.Seek(off, w)
+}
+func (c *countingReadSource) ReadAt(p []byte, off int64) (int, error) {
+	c.ReadAtCalls++
+	return c.rs.ReadAt(p, off)
+}
 
 func TestSummaryWithHint(t *testing.T) {
 	summary := &Summary{
@@ -238,58 +252,61 @@ func TestSummaryWithHint(t *testing.T) {
 	body := make([]byte, 4096) // arbitrary body so file is larger than tail.
 
 	t.Run("hint_zero_falls_back_to_seek_read", func(t *testing.T) {
+		// No hint: footer and summary each cost one Seek+Read (2 total).
 		c := &countingReadSource{rs: makeReaderFixture(t, body, compressed, nil)}
 		reader, err := NewReader(c)
 		if err != nil {
 			t.Fatalf("NewReader: %v", err)
 		}
-		c.ReadCalls, c.SeekCalls, c.ReadAtCalls = 0, 0, 0
 
 		if _, err := reader.summaryWithHint(0); err != nil {
 			t.Fatalf("summaryWithHint(0): %v", err)
 		}
-		if c.ReadAtCalls != 0 {
-			t.Errorf("hint=0 should use Seek+Read, got ReadAtCalls=%d", c.ReadAtCalls)
+		if c.ReadAtCalls != 2 {
+			t.Errorf("hint=0 should issue two ReadAt calls, got ReadAtCalls=%d", c.ReadAtCalls)
 		}
-		if c.SeekCalls == 0 || c.ReadCalls == 0 {
-			t.Errorf("hint=0 should issue Seek+Read, got SeekCalls=%d ReadCalls=%d", c.SeekCalls, c.ReadCalls)
+		if c.SeekCalls != 1 || c.ReadCalls != 0 {
+			t.Errorf("hint=0 should not issue 1 Seek and 0 Read, got SeekCalls=%d ReadCalls=%d", c.SeekCalls, c.ReadCalls)
 		}
 	})
 
-	t.Run("hint_covers_summary_one_read_at", func(t *testing.T) {
+	t.Run("hint_covers_footer_and_summary_one_read_at", func(t *testing.T) {
+		// Sufficient hint: one ReadAt covers footer + compressed summary.
 		c := &countingReadSource{rs: makeReaderFixture(t, body, compressed, nil)}
 		reader, err := NewReader(c)
 		if err != nil {
 			t.Fatalf("NewReader: %v", err)
 		}
-		c.ReadCalls, c.SeekCalls, c.ReadAtCalls = 0, 0, 0
 
-		hint := int64(len(compressed) + footerLen + 8) // covers summary + footer + slack
+		hint := int64(len(compressed) + footerLen + 8) // covers footer + summary + slack
 		if _, err := reader.summaryWithHint(hint); err != nil {
 			t.Fatalf("summaryWithHint: %v", err)
 		}
 		if c.ReadAtCalls != 1 {
 			t.Errorf("expected exactly 1 ReadAt for prefetch hit, got %d", c.ReadAtCalls)
 		}
-		if c.ReadCalls != 0 {
-			t.Errorf("expected no Read calls on prefetch hit, got %d", c.ReadCalls)
+		if c.SeekCalls != 1 || c.ReadCalls != 0 {
+			t.Errorf("hint=0 should not issue 1 Seek and 0 Read, got SeekCalls=%d ReadCalls=%d", c.SeekCalls, c.ReadCalls)
 		}
 	})
 
 	t.Run("hint_too_small_falls_back_to_seek_read", func(t *testing.T) {
+		// Hint covers footer but not summary: one ReadAt for the tail + one
+		// Seek+Read for the summary.
 		c := &countingReadSource{rs: makeReaderFixture(t, body, compressed, nil)}
 		reader, err := NewReader(c)
 		if err != nil {
 			t.Fatalf("NewReader: %v", err)
 		}
-		c.ReadCalls, c.SeekCalls, c.ReadAtCalls = 0, 0, 0
 
-		// Hint smaller than summary+footer → fall back path.
 		if _, err := reader.summaryWithHint(footerLen); err != nil {
 			t.Fatalf("summaryWithHint: %v", err)
 		}
-		if c.ReadCalls == 0 {
-			t.Errorf("expected fall-back Read on prefetch miss, got 0")
+		if c.ReadAtCalls != 2 {
+			t.Errorf("hint=footerLen should issue two ReadAt calls, got ReadAtCalls=%d", c.ReadAtCalls)
+		}
+		if c.SeekCalls != 1 || c.ReadCalls != 0 {
+			t.Errorf("hint=0 should not issue 1 Seek and 0 Read, got SeekCalls=%d ReadCalls=%d", c.SeekCalls, c.ReadCalls)
 		}
 	})
 }

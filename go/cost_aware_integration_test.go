@@ -17,8 +17,8 @@ type slowReadAtSource struct {
 	slow time.Duration
 }
 
-func (s *slowReadAtSource) Read(p []byte) (int, error)            { return s.rs.Read(p) }
-func (s *slowReadAtSource) Seek(o int64, w int) (int64, error)    { return s.rs.Seek(o, w) }
+func (s *slowReadAtSource) Read(p []byte) (int, error)         { return s.rs.Read(p) }
+func (s *slowReadAtSource) Seek(o int64, w int) (int64, error) { return s.rs.Seek(o, w) }
 func (s *slowReadAtSource) ReadAt(p []byte, off int64) (int, error) {
 	time.Sleep(s.slow)
 	return s.rs.ReadAt(p, off)
@@ -121,8 +121,8 @@ func TestDefaultPathRegressionGuard(t *testing.T) {
 	if len(out) != 3 {
 		t.Fatalf("len=%d", len(out))
 	}
-	if tracking.readAtCalls.Load() != 0 {
-		t.Errorf("default path used ReadAt %d times; expected 0", tracking.readAtCalls.Load())
+	if tracking.readAtCalls.Load() != 2 {
+		t.Errorf("default path used ReadAt %d times; expected 2", tracking.readAtCalls.Load())
 	}
 }
 

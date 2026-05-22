@@ -9,45 +9,33 @@ import (
 type Reader struct {
 	rs ReadSource
 
+	size int64
+
 	summary *Summary
 	footer  *Footer
 }
 
 const footerLen = 13
 
+// NewReader creates a Reader backed by rs. No I/O is performed; the footer
+// and summary are loaded lazily on the first call to Summary or ReadMessages.
 func NewReader(rs ReadSource) (*Reader, error) {
-	if _, err := rs.Seek(-footerLen, io.SeekEnd); err != nil {
-		return nil, err
-	}
-
-	footer, err := ReadFooter(rs)
-	if err != nil {
-		return nil, err
-	}
-
-	if footer.Magic != [5]byte{'7', 'U', 'R', 'B', '0'} {
-		return nil, fmt.Errorf("invalid magic number")
-	}
-
-	return &Reader{
-		rs:     rs,
-		footer: footer,
-	}, nil
+	return &Reader{rs: rs}, nil
 }
 
 // Summary returns the parsed summary, loading it lazily on the first call.
-// Subsequent calls return the cached value. Uses today's Seek+Read flow.
+// Subsequent calls return the cached value.
 func (r *Reader) Summary() (*Summary, error) {
 	return r.summaryWithHint(0)
 }
 
-// summaryWithHint loads the summary, optionally taking a single speculative
-// ReadAt at the file's tail of size prefetch (which should include enough
-// trailing bytes to cover the footer + the compressed summary). On prefetch
-// hit, only one ReadAt is needed; on miss, a second exact-sized ReadAt is
-// issued for the summary.
+// summaryWithHint loads the footer and summary, optionally via a single
+// speculative ReadAt of prefetch bytes from the file tail. When prefetch is
+// large enough to cover footer + compressed summary, only one ReadAt is issued.
+// When prefetch <= 0 or the tail window is too small for the summary, two
+// sequential Seek+Read calls are used instead (one for the footer, one for the
+// summary).
 //
-// prefetch <= 0 disables the hint and falls back to today's Seek+Read flow.
 // Result is cached in r.summary; subsequent calls return that cached value
 // regardless of the prefetch hint.
 func (r *Reader) summaryWithHint(prefetch int64) (*Summary, error) {
@@ -55,38 +43,47 @@ func (r *Reader) summaryWithHint(prefetch int64) (*Summary, error) {
 		return r.summary, nil
 	}
 
-	var compressed []byte
-
-	if prefetch > 0 && prefetch >= r.footer.SummaryLen+footerLen {
-		// One speculative ReadAt covering [size-prefetch, size). If the
-		// summary fits in there, we're done in one request.
+	if r.size == 0 {
 		size, err := r.rs.Seek(0, io.SeekEnd)
 		if err != nil {
 			return nil, err
 		}
-		readLen := prefetch
-		if readLen > size {
-			readLen = size
-		}
-		tail := make([]byte, readLen)
-		if _, err := r.rs.ReadAt(tail, size-readLen); err != nil && err != io.EOF {
-			return nil, err
-		}
-		// The compressed summary sits at the end-of-tail minus the footer
-		// minus the summary length.
-		if int64(len(tail)) >= r.footer.SummaryLen+footerLen {
-			start := int64(len(tail)) - footerLen - r.footer.SummaryLen
-			compressed = tail[start : start+r.footer.SummaryLen]
-		}
+		r.size = size
 	}
 
-	if compressed == nil {
-		// Default path: today's Seek+Read flow.
-		if _, err := r.rs.Seek(-r.footer.SummaryLen-footerLen, io.SeekEnd); err != nil {
-			return nil, err
-		}
-		compressed = make([]byte, r.footer.SummaryLen)
-		if _, err := io.ReadFull(r.rs, compressed); err != nil {
+	if r.size < footerLen {
+		return nil, fmt.Errorf("file is too small to contain a footer")
+	}
+
+	var compressed []byte
+
+	if prefetch <= 0 {
+		prefetch = footerLen
+	}
+	if prefetch > r.size {
+		prefetch = r.size
+	}
+
+	tail := make([]byte, prefetch)
+	if _, err := r.rs.ReadAt(tail, r.size-prefetch); err != nil && err != io.EOF {
+		return nil, err
+	}
+
+	footer, err := ReadFooter(bytes.NewReader(tail[int64(len(tail))-footerLen:]))
+	if err != nil {
+		return nil, err
+	}
+	if footer.Magic != [5]byte{'7', 'U', 'R', 'B', '0'} {
+		return nil, fmt.Errorf("invalid magic number")
+	}
+	r.footer = footer
+
+	if int64(len(tail)) >= footer.SummaryLen+footerLen {
+		start := int64(len(tail)) - footerLen - footer.SummaryLen
+		compressed = tail[start : start+footer.SummaryLen]
+	} else {
+		compressed = make([]byte, footer.SummaryLen)
+		if _, err := r.rs.ReadAt(compressed, r.size-footer.SummaryLen-footerLen); err != nil {
 			return nil, err
 		}
 	}
