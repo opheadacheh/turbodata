@@ -29,7 +29,7 @@ type MessageIterator struct {
 	tailPrefetch int64
 
 	// Cost-aware path state (only populated when strategy != nil).
-	costAwareGroups []*costAwareGroupIterator
+	preloadedTopicsGroups []*preloadedTopicsGroupIterator
 }
 
 func newMessageIterator(rs ReadSource, summary *Summary) *MessageIterator {
@@ -104,7 +104,7 @@ func (it *MessageIterator) prepare() error {
 // chunks across all in-scope groups (Phase A), decode + sortAndFilter to learn
 // each chunk's kept messages, then pre-fetch all data ranges (Phase B; chunk-
 // level for compressed groups, message-level for uncompressed groups), and
-// build a costAwareGroupIterator per group.
+// build a preloadedTopicsGroupIterator per group.
 func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicNamesMap map[string]struct{}) error {
 	ctx := context.Background()
 	strategy := *it.strategy
@@ -192,17 +192,20 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 	}
 	loadedIndex := NewLoadedBytes(rangesA, locA, bufsA)
 
-	// ---- Decode each index chunk; run sortAndFilter to learn kept messages.
+	// ---- Decode each index chunk; run sortAndFilterMerge to learn kept messages.
 	type decodedChunk struct {
 		indexChunk    *IndexChunk
-		messages      []messageRef
+		messages      []*messageIndexWithTopicId
 		messageLens   []int64
 	}
 	perGroupChunks := make([][]decodedChunk, len(scoped))
-	// Reused across all index chunks: ReadIndexChunk + sortAndFilter copy
+	// Reused across all index chunks: ReadIndexChunk + sortAndFilterMerge copy
 	// every value they need out of the decompressed bytes (no aliasing into
-	// the buffer), so a single scratch buffer suffices.
+	// the buffer), so a single scratch buffer suffices. The merge scratch is
+	// also shared across chunks; output slices are allocated fresh per chunk
+	// because they're retained for the iterator's lifetime.
 	indexDecompressBuf := NewReusableBuffer()
+	mergeScratch := newSortAndFilterMergeScratch()
 	for gi, g := range scoped {
 		perGroupChunks[gi] = make([]decodedChunk, len(g.filteredInfos))
 		for ci, info := range g.filteredInfos {
@@ -214,7 +217,18 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 			if err != nil {
 				return err
 			}
-			msgs, lens := sortAndFilter(ic.TopicIndexes, ic.UncompressedLen, topicIds, it.startTimestamp, it.endTimestamp)
+			var msgs []*messageIndexWithTopicId
+			var lens []int64
+			sortAndFilterMerge(
+				ic.TopicIndexes,
+				ic.UncompressedLen,
+				topicIds,
+				it.startTimestamp,
+				it.endTimestamp,
+				mergeScratch,
+				&msgs,
+				&lens,
+			)
 			perGroupChunks[gi][ci] = decodedChunk{indexChunk: ic, messages: msgs, messageLens: lens}
 		}
 	}
@@ -241,7 +255,7 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 		for _, dc := range perGroupChunks[gi] {
 			for k, msg := range dc.messages {
 				rangesB = append(rangesB, Range{
-					Offset: dc.indexChunk.ChunkOffset + msg.OffsetInChunk,
+					Offset: dc.indexChunk.ChunkOffset + msg.messageIndex.OffsetInChunk,
 					Length: dc.messageLens[k],
 				})
 			}
@@ -257,11 +271,11 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 	}
 	loadedData := NewLoadedBytes(rangesB, locB, bufsB)
 
-	// ---- Build a costAwareGroupIterator per scoped group.
-	it.costAwareGroups = make([]*costAwareGroupIterator, 0, len(scoped))
+	// ---- Build a preloadedTopicsGroupIterator per scoped group.
+	it.preloadedTopicsGroups = make([]*preloadedTopicsGroupIterator, 0, len(scoped))
 	for gi, g := range scoped {
 		indexChunks := make([]*IndexChunk, 0, len(perGroupChunks[gi]))
-		chunkMsgs := make([][]messageRef, 0, len(perGroupChunks[gi]))
+		chunkMsgs := make([][]*messageIndexWithTopicId, 0, len(perGroupChunks[gi]))
 		chunkLens := make([][]int64, 0, len(perGroupChunks[gi]))
 		for _, dc := range perGroupChunks[gi] {
 			if len(dc.messages) == 0 {
@@ -274,8 +288,8 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 		if len(indexChunks) == 0 {
 			continue
 		}
-		groupIt := newCostAwareGroupIterator(g.isCompressed, it.order, indexChunks, chunkMsgs, chunkLens, loadedData)
-		it.costAwareGroups = append(it.costAwareGroups, groupIt)
+		groupIt := newPreloadedTopicsGroupIterator(g.isCompressed, it.order, indexChunks, chunkMsgs, chunkLens, loadedData)
+		it.preloadedTopicsGroups = append(it.preloadedTopicsGroups, groupIt)
 	}
 	return nil
 }
@@ -315,7 +329,7 @@ func (it *MessageIterator) NextInto(buf *ReusableBuffer) (int64, string, error) 
 
 func (it *MessageIterator) groupNext(groupIndex int) (int64, uint16, []byte, error) {
 	if it.strategy != nil {
-		return it.costAwareGroups[groupIndex].Next()
+		return it.preloadedTopicsGroups[groupIndex].Next()
 	}
 	return it.topicsGroupIterators[groupIndex].Next()
 }
@@ -323,7 +337,7 @@ func (it *MessageIterator) groupNext(groupIndex int) (int64, uint16, []byte, err
 func (it *MessageIterator) initLoad() error {
 	groupCount := len(it.topicsGroupIterators)
 	if it.strategy != nil {
-		groupCount = len(it.costAwareGroups)
+		groupCount = len(it.preloadedTopicsGroups)
 	}
 	for i := 0; i < groupCount; i++ {
 		timestamp, topicId, data, err := it.groupNext(i)

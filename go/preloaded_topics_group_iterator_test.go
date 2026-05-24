@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func collectGroup(t *testing.T, it *costAwareGroupIterator) []testMsg {
+func collectGroup(t *testing.T, it *preloadedTopicsGroupIterator) []testMsg {
 	t.Helper()
 	var out []testMsg
 	for {
@@ -24,17 +24,26 @@ func collectGroup(t *testing.T, it *costAwareGroupIterator) []testMsg {
 	return out
 }
 
-// TestCostAwareGroupIteratorUncompressedForward builds a LoadedBytes that
+// mkMsg builds the pointer-typed message-with-topic struct used by the
+// preloaded iterator. Test ergonomics only.
+func mkMsg(ts int64, tid uint16, off int64) *messageIndexWithTopicId {
+	return &messageIndexWithTopicId{
+		topicId:      tid,
+		messageIndex: &MessageIndex{Timestamp: ts, OffsetInChunk: off},
+	}
+}
+
+// TestPreloadedTopicsGroupIteratorUncompressedForward builds a LoadedBytes that
 // holds messages directly (mimicking what the cost-aware setup does for
 // uncompressed groups: register per-message offsets), then walks them.
-func TestCostAwareGroupIteratorUncompressedForward(t *testing.T) {
+func TestPreloadedTopicsGroupIteratorUncompressedForward(t *testing.T) {
 	// One chunk at offset 1000, with three messages at offsets 0, 100, 250
 	// within the chunk and respective lengths 10, 50, 30.
 	chunkOff := int64(1000)
-	msgs := []messageRef{
-		{Timestamp: 10, TopicId: 0, OffsetInChunk: 0},
-		{Timestamp: 20, TopicId: 0, OffsetInChunk: 100},
-		{Timestamp: 30, TopicId: 0, OffsetInChunk: 250},
+	msgs := []*messageIndexWithTopicId{
+		mkMsg(10, 0, 0),
+		mkMsg(20, 0, 100),
+		mkMsg(30, 0, 250),
 	}
 	lens := []int64{10, 50, 30}
 
@@ -53,7 +62,7 @@ func TestCostAwareGroupIteratorUncompressedForward(t *testing.T) {
 	}
 	ic := &IndexChunk{ChunkOffset: chunkOff, ChunkLen: 280, UncompressedLen: 280}
 
-	it := newCostAwareGroupIterator(false, TimeOrder, []*IndexChunk{ic}, [][]messageRef{msgs}, [][]int64{lens}, lb)
+	it := newPreloadedTopicsGroupIterator(false, TimeOrder, []*IndexChunk{ic}, [][]*messageIndexWithTopicId{msgs}, [][]int64{lens}, lb)
 	out := collectGroup(t, it)
 	if len(out) != 3 {
 		t.Fatalf("len=%d", len(out))
@@ -70,18 +79,18 @@ func TestCostAwareGroupIteratorUncompressedForward(t *testing.T) {
 	}
 }
 
-// TestCostAwareGroupIteratorUncompressedReverse exercises ReverseTimeOrder
+// TestPreloadedTopicsGroupIteratorUncompressedReverse exercises ReverseTimeOrder
 // across two chunks to verify reverse traversal logic.
-func TestCostAwareGroupIteratorUncompressedReverse(t *testing.T) {
+func TestPreloadedTopicsGroupIteratorUncompressedReverse(t *testing.T) {
 	chunkOff1 := int64(0)
 	chunkOff2 := int64(1000)
-	msgs1 := []messageRef{
-		{Timestamp: 10, TopicId: 0, OffsetInChunk: 0},
-		{Timestamp: 20, TopicId: 0, OffsetInChunk: 10},
+	msgs1 := []*messageIndexWithTopicId{
+		mkMsg(10, 0, 0),
+		mkMsg(20, 0, 10),
 	}
-	msgs2 := []messageRef{
-		{Timestamp: 30, TopicId: 0, OffsetInChunk: 0},
-		{Timestamp: 40, TopicId: 0, OffsetInChunk: 5},
+	msgs2 := []*messageIndexWithTopicId{
+		mkMsg(30, 0, 0),
+		mkMsg(40, 0, 5),
 	}
 	bufs := [][]byte{
 		[]byte("0000000000"), // chunk1 msg[0] (10 bytes)
@@ -101,11 +110,11 @@ func TestCostAwareGroupIteratorUncompressedReverse(t *testing.T) {
 	ic1 := &IndexChunk{ChunkOffset: chunkOff1, ChunkLen: 20, UncompressedLen: 20}
 	ic2 := &IndexChunk{ChunkOffset: chunkOff2, ChunkLen: 10, UncompressedLen: 10}
 
-	it := newCostAwareGroupIterator(
+	it := newPreloadedTopicsGroupIterator(
 		false,
 		ReverseTimeOrder,
 		[]*IndexChunk{ic1, ic2},
-		[][]messageRef{msgs1, msgs2},
+		[][]*messageIndexWithTopicId{msgs1, msgs2},
 		[][]int64{{10, 10}, {5, 5}},
 		lb,
 	)
@@ -121,10 +130,10 @@ func TestCostAwareGroupIteratorUncompressedReverse(t *testing.T) {
 	}
 }
 
-// TestCostAwareGroupIteratorCompressed registers one compressed chunk in
+// TestPreloadedTopicsGroupIteratorCompressed registers one compressed chunk in
 // LoadedBytes and verifies the iterator decompresses it once and slices
 // individual messages out of the decompressed buffer.
-func TestCostAwareGroupIteratorCompressed(t *testing.T) {
+func TestPreloadedTopicsGroupIteratorCompressed(t *testing.T) {
 	// Build a synthetic "decompressed" payload of 30 bytes; messages of length
 	// 10 each at offsets 0, 10, 20.
 	uncompressed := []byte("AAAAAAAAAABBBBBBBBBBCCCCCCCCCC")
@@ -134,10 +143,10 @@ func TestCostAwareGroupIteratorCompressed(t *testing.T) {
 	}
 
 	chunkOff := int64(500)
-	msgs := []messageRef{
-		{Timestamp: 1, TopicId: 0, OffsetInChunk: 0},
-		{Timestamp: 2, TopicId: 0, OffsetInChunk: 10},
-		{Timestamp: 3, TopicId: 0, OffsetInChunk: 20},
+	msgs := []*messageIndexWithTopicId{
+		mkMsg(1, 0, 0),
+		mkMsg(2, 0, 10),
+		mkMsg(3, 0, 20),
 	}
 	lens := []int64{10, 10, 10}
 	bufs := [][]byte{compressed}
@@ -149,7 +158,7 @@ func TestCostAwareGroupIteratorCompressed(t *testing.T) {
 	}
 	ic := &IndexChunk{ChunkOffset: chunkOff, ChunkLen: int64(len(compressed)), UncompressedLen: int64(len(uncompressed))}
 
-	it := newCostAwareGroupIterator(true, TimeOrder, []*IndexChunk{ic}, [][]messageRef{msgs}, [][]int64{lens}, lb)
+	it := newPreloadedTopicsGroupIterator(true, TimeOrder, []*IndexChunk{ic}, [][]*messageIndexWithTopicId{msgs}, [][]int64{lens}, lb)
 	out := collectGroup(t, it)
 	if len(out) != 3 {
 		t.Fatalf("len=%d", len(out))
@@ -162,10 +171,10 @@ func TestCostAwareGroupIteratorCompressed(t *testing.T) {
 	}
 }
 
-// TestCostAwareGroupIteratorEmpty verifies an empty group iterator returns EOF
+// TestPreloadedTopicsGroupIteratorEmpty verifies an empty group iterator returns EOF
 // without panicking.
-func TestCostAwareGroupIteratorEmpty(t *testing.T) {
-	it := newCostAwareGroupIterator(false, TimeOrder, nil, nil, nil, &LoadedBytes{index: map[int64]bytesLocation{}})
+func TestPreloadedTopicsGroupIteratorEmpty(t *testing.T) {
+	it := newPreloadedTopicsGroupIterator(false, TimeOrder, nil, nil, nil, &LoadedBytes{index: map[int64]bytesLocation{}})
 	_, _, _, err := it.Next()
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("expected EOF, got %v", err)

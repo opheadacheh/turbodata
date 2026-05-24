@@ -3,7 +3,7 @@
 import type { Decompressor } from "./compression.js";
 import { defaultDecompressor } from "./compression.js";
 import { BinaryReader, readFooter, readIndexChunk, readSummary } from "./io.js";
-import { CostAwareGroupIterator } from "./iterators/cost_aware_group_iterator.js";
+import { PreloadedTopicsGroupIterator } from "./iterators/preloaded_topics_group_iterator.js";
 import { MessageHeap } from "./iterators/message_heap.js";
 import { TopicsGroupIterator } from "./iterators/topics_group_iterator.js";
 import { LoadedBytes } from "./loaded_bytes.js";
@@ -415,7 +415,7 @@ export class Reader {
     const loadedData = new LoadedBytes(rangesB, plannedB.locations, bufsB);
 
     // ---- Build per-group iterators.
-    const iters: CostAwareGroupIterator[] = [];
+    const iters: PreloadedTopicsGroupIterator[] = [];
     for (let gi = 0; gi < scoped.length; gi++) {
       const g = scoped[gi]!;
       const indexChunks: IndexChunk[] = [];
@@ -433,7 +433,7 @@ export class Reader {
         continue;
       }
       iters.push(
-        new CostAwareGroupIterator({
+        new PreloadedTopicsGroupIterator({
           isCompressed: g.isCompressed,
           reverse: args.reverse,
           indexChunks,

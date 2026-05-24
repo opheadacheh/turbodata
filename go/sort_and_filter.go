@@ -5,16 +5,37 @@ import (
 	"sync"
 )
 
-// messageRef is a kept message after sortAndFilter — enough to yield a result
-// (timestamp, topicId, byte slice) without holding onto the original
-// *MessageIndex pointer.
-type messageRef struct {
-	Timestamp     int64
-	TopicId       uint16
-	OffsetInChunk int64
+// sortAndFilterMergeScratch bundles the reusable working state for
+// sortAndFilterMerge. A single scratch can be shared across many calls; it
+// owns no per-call data once a call returns.
+type sortAndFilterMergeScratch struct {
+	sortHeap    *MessageIndexHeap
+	idToIndexes map[uint16][]*MessageIndex
+	idToCursor  map[uint16]int
+
+	// Sorted-but-not-yet-filtered working slices. Capacity grows; never shrinks.
+	sortedItems []*messageIndexWithTopicId
+	sortedLens  []int64
+
+	// Pool of *messageIndexWithTopicId. Reused for both heap-internal items
+	// and emitted output items. Items handed to the caller via outMsgs are
+	// "out on loan"; they return to the pool either via the next call's
+	// prologue (when the caller reuses the same outMsgs slice) or get GC'd.
+	itemPool sync.Pool
 }
 
-// sortAndFilter computes the kept-message list for a single decoded
+func newSortAndFilterMergeScratch() *sortAndFilterMergeScratch {
+	s := &sortAndFilterMergeScratch{
+		sortHeap:    &MessageIndexHeap{},
+		idToIndexes: make(map[uint16][]*MessageIndex),
+		idToCursor:  make(map[uint16]int),
+	}
+	heap.Init(s.sortHeap)
+	s.itemPool.New = func() any { return &messageIndexWithTopicId{} }
+	return s
+}
+
+// sortAndFilterMerge computes the kept-message list for a single decoded
 // IndexChunk in one pass:
 //   - sorts MessageIndexes from all topics in offset order (matches the
 //     writer's interleaving, which equals timestamp order),
@@ -23,91 +44,115 @@ type messageRef struct {
 //   - drops messages whose topicId isn't in topicIds or whose timestamp falls
 //     outside [startTimestamp, endTimestamp].
 //
-// Pure / allocating; suitable for the cost-aware setup path which runs this
-// once per chunk at iterator construction. The per-Next() hot path in
-// TopicsGroupIterator keeps its in-place, pool-reusing variant unchanged.
-func sortAndFilter(
+// The caller owns scratch (reused across calls) and the output slices (also
+// reusable). At entry, items currently in *outMsgs are returned to the pool;
+// pass a fresh empty slice to opt out of that recycling.
+//
+// This single function serves both the per-Next() hot path in
+// TopicsGroupIterator and the per-chunk setup in prepareCostAware.
+func sortAndFilterMerge(
 	topicIndexes []*TopicIndex,
 	totalLen int64,
 	topicIds map[uint16]struct{},
 	startTimestamp, endTimestamp int64,
-) (msgs []messageRef, lens []int64) {
-	total := 0
-	for _, ti := range topicIndexes {
-		total += len(ti.MessageIndexes)
+	scratch *sortAndFilterMergeScratch,
+	outMsgs *[]*messageIndexWithTopicId,
+	outLens *[]int64,
+) {
+	// Return any previously-emitted items in *outMsgs to the pool; reset.
+	for _, item := range *outMsgs {
+		item.messageIndex = nil
+		scratch.itemPool.Put(item)
 	}
-	if total == 0 {
-		return nil, nil
+	*outMsgs = (*outMsgs)[:0]
+	*outLens = (*outLens)[:0]
+
+	totalMessages := 0
+	for _, ti := range topicIndexes {
+		totalMessages += len(ti.MessageIndexes)
+	}
+	if totalMessages == 0 {
+		return
 	}
 
-	sorted := make([]messageIndexWithTopicId, 0, total)
+	// Grow / reset scratch slices.
+	if cap(scratch.sortedItems) < totalMessages {
+		scratch.sortedItems = make([]*messageIndexWithTopicId, 0, totalMessages)
+	} else {
+		scratch.sortedItems = scratch.sortedItems[:0]
+	}
+	if cap(scratch.sortedLens) < totalMessages {
+		scratch.sortedLens = make([]int64, totalMessages)
+	} else {
+		scratch.sortedLens = scratch.sortedLens[:totalMessages]
+	}
 
 	if len(topicIndexes) == 1 {
+		// Fast path: single topic, messages are already in offset order.
 		ti := topicIndexes[0]
 		for _, mi := range ti.MessageIndexes {
-			sorted = append(sorted, messageIndexWithTopicId{topicId: ti.Id, messageIndex: mi})
+			item := scratch.itemPool.Get().(*messageIndexWithTopicId)
+			item.topicId = ti.Id
+			item.messageIndex = mi
+			scratch.sortedItems = append(scratch.sortedItems, item)
 		}
 	} else {
-		h := &MessageIndexHeap{}
-		heap.Init(h)
-		idToIndexes := make(map[uint16][]*MessageIndex, len(topicIndexes))
-		idToCursor := make(map[uint16]int, len(topicIndexes))
-		pool := sync.Pool{New: func() any { return &messageIndexWithTopicId{} }}
-
+		// K-way merge by offsetInChunk via min-heap.
+		for k := range scratch.idToIndexes {
+			delete(scratch.idToIndexes, k)
+		}
+		for k := range scratch.idToCursor {
+			delete(scratch.idToCursor, k)
+		}
 		for _, ti := range topicIndexes {
 			if len(ti.MessageIndexes) == 0 {
 				continue
 			}
-			idToIndexes[ti.Id] = ti.MessageIndexes
-			item := pool.Get().(*messageIndexWithTopicId)
+			scratch.idToIndexes[ti.Id] = ti.MessageIndexes
+			item := scratch.itemPool.Get().(*messageIndexWithTopicId)
 			item.topicId = ti.Id
 			item.messageIndex = ti.MessageIndexes[0]
-			heap.Push(h, item)
-			idToCursor[ti.Id] = 1
+			heap.Push(scratch.sortHeap, item)
+			scratch.idToCursor[ti.Id] = 1
 		}
 
-		for h.Len() > 0 {
-			item, _ := heap.Pop(h).(*messageIndexWithTopicId)
-			sorted = append(sorted, messageIndexWithTopicId{topicId: item.topicId, messageIndex: item.messageIndex})
+		for scratch.sortHeap.Len() > 0 {
+			item, _ := heap.Pop(scratch.sortHeap).(*messageIndexWithTopicId)
+			scratch.sortedItems = append(scratch.sortedItems, item)
 			tid := item.topicId
-			cursor := idToCursor[tid]
-			item.messageIndex = nil
-			pool.Put(item)
-			if cursor >= len(idToIndexes[tid]) {
+			cursor := scratch.idToCursor[tid]
+			if cursor >= len(scratch.idToIndexes[tid]) {
 				continue
 			}
-			next := pool.Get().(*messageIndexWithTopicId)
+			next := scratch.itemPool.Get().(*messageIndexWithTopicId)
 			next.topicId = tid
-			next.messageIndex = idToIndexes[tid][cursor]
-			heap.Push(h, next)
-			idToCursor[tid]++
+			next.messageIndex = scratch.idToIndexes[tid][cursor]
+			heap.Push(scratch.sortHeap, next)
+			scratch.idToCursor[tid]++
 		}
 	}
 
 	// Compute per-entry lengths from offset deltas.
-	allLens := make([]int64, len(sorted))
-	for i := 0; i < len(sorted)-1; i++ {
-		allLens[i] = sorted[i+1].messageIndex.OffsetInChunk - sorted[i].messageIndex.OffsetInChunk
+	for i := 0; i < len(scratch.sortedItems)-1; i++ {
+		scratch.sortedLens[i] = scratch.sortedItems[i+1].messageIndex.OffsetInChunk - scratch.sortedItems[i].messageIndex.OffsetInChunk
 	}
-	allLens[len(allLens)-1] = totalLen - sorted[len(sorted)-1].messageIndex.OffsetInChunk
+	scratch.sortedLens[len(scratch.sortedItems)-1] = totalLen - scratch.sortedItems[len(scratch.sortedItems)-1].messageIndex.OffsetInChunk
 
-	// Filter by topic + timestamp range.
-	msgs = make([]messageRef, 0, len(sorted))
-	lens = make([]int64, 0, len(sorted))
-	for i, item := range sorted {
+	// Filter by topic + timestamp range. Dropped items go back to the pool;
+	// kept items are appended to *outMsgs / *outLens.
+	for i, item := range scratch.sortedItems {
 		if _, ok := topicIds[item.topicId]; !ok {
+			item.messageIndex = nil
+			scratch.itemPool.Put(item)
 			continue
 		}
 		ts := item.messageIndex.Timestamp
 		if ts < startTimestamp || ts > endTimestamp {
+			item.messageIndex = nil
+			scratch.itemPool.Put(item)
 			continue
 		}
-		msgs = append(msgs, messageRef{
-			Timestamp:     ts,
-			TopicId:       item.topicId,
-			OffsetInChunk: item.messageIndex.OffsetInChunk,
-		})
-		lens = append(lens, allLens[i])
+		*outMsgs = append(*outMsgs, item)
+		*outLens = append(*outLens, scratch.sortedLens[i])
 	}
-	return msgs, lens
 }

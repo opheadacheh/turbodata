@@ -2,17 +2,17 @@ package turbodata
 
 import "io"
 
-// costAwareGroupIterator yields messages from one topic group when the reader
+// preloadedTopicsGroupIterator yields messages from one topic group when the reader
 // runs on the cost-aware path. All bytes the group needs have been pre-fetched
 // into loadedData, and the per-chunk kept-message lists have been computed at
 // setup time, so this type just walks forward (or backward) through them.
-type costAwareGroupIterator struct {
+type preloadedTopicsGroupIterator struct {
 	isCompressed bool
 	order        Order
 
 	indexChunks   []*IndexChunk
-	chunkMessages [][]messageRef // parallel to indexChunks
-	chunkMsgLens  [][]int64      // parallel to indexChunks
+	chunkMessages [][]*messageIndexWithTopicId // parallel to indexChunks
+	chunkMsgLens  [][]int64                    // parallel to indexChunks
 
 	loadedData *LoadedBytes
 
@@ -25,15 +25,15 @@ type costAwareGroupIterator struct {
 	loadedChunkIdx int // which chunk's data is currently in decompressBuf (-1 = none)
 }
 
-func newCostAwareGroupIterator(
+func newPreloadedTopicsGroupIterator(
 	isCompressed bool,
 	order Order,
 	indexChunks []*IndexChunk,
-	chunkMessages [][]messageRef,
+	chunkMessages [][]*messageIndexWithTopicId,
 	chunkMsgLens [][]int64,
 	loadedData *LoadedBytes,
-) *costAwareGroupIterator {
-	it := &costAwareGroupIterator{
+) *preloadedTopicsGroupIterator {
+	it := &preloadedTopicsGroupIterator{
 		isCompressed:   isCompressed,
 		order:          order,
 		indexChunks:    indexChunks,
@@ -62,7 +62,7 @@ func newCostAwareGroupIterator(
 // Next returns the next (timestamp, topicId, data) record, or io.EOF when the
 // group is exhausted. Returned data aliases loadedData / decompressBuf; the
 // caller must copy if it needs to outlive the next call.
-func (it *costAwareGroupIterator) Next() (int64, uint16, []byte, error) {
+func (it *preloadedTopicsGroupIterator) Next() (int64, uint16, []byte, error) {
 	for {
 		if it.chunkIdx < 0 || it.chunkIdx >= len(it.indexChunks) {
 			return 0, 0, nil, io.EOF
@@ -88,18 +88,18 @@ func (it *costAwareGroupIterator) Next() (int64, uint16, []byte, error) {
 
 		var data []byte
 		if it.isCompressed {
-			end := msg.OffsetInChunk + length
-			data = it.decompressBuf.Data[msg.OffsetInChunk:end]
+			end := msg.messageIndex.OffsetInChunk + length
+			data = it.decompressBuf.Data[msg.messageIndex.OffsetInChunk:end]
 		} else {
-			data = it.loadedData.Get(chunkOffset + msg.OffsetInChunk)
+			data = it.loadedData.Get(chunkOffset + msg.messageIndex.OffsetInChunk)
 		}
 
 		it.advanceMessage()
-		return msg.Timestamp, msg.TopicId, data, nil
+		return msg.messageIndex.Timestamp, msg.topicId, data, nil
 	}
 }
 
-func (it *costAwareGroupIterator) advanceMessage() {
+func (it *preloadedTopicsGroupIterator) advanceMessage() {
 	if it.order == ReverseTimeOrder {
 		it.msgIdx--
 	} else {
@@ -107,7 +107,7 @@ func (it *costAwareGroupIterator) advanceMessage() {
 	}
 }
 
-func (it *costAwareGroupIterator) advanceChunk() {
+func (it *preloadedTopicsGroupIterator) advanceChunk() {
 	if it.order == ReverseTimeOrder {
 		it.chunkIdx--
 		if it.chunkIdx >= 0 {

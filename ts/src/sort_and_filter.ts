@@ -6,6 +6,7 @@
 // in timestamp order, so offset order == timestamp order within a chunk. We
 // preserve that invariant rather than re-sorting by timestamp explicitly.
 
+import { MessageHeap } from "./iterators/message_heap.js";
 import type { IndexChunk, MessageIndex, TopicIndex } from "./types.js";
 
 export interface MessageRef {
@@ -44,30 +45,29 @@ export function sortAndFilter(
       sorted[writeIdx++] = { topicId: ti.id, mi };
     }
   } else {
-    // K-way merge by offsetInChunk across topics.
-    const cursors: number[] = topicIndexes.map(() => 0);
-    while (true) {
-      let pickedTopic = -1;
-      let pickedOffset = 0n;
-      for (let t = 0; t < topicIndexes.length; t++) {
-        const c = cursors[t]!;
-        const mis = topicIndexes[t]!.messageIndexes;
-        if (c >= mis.length) {
-          continue;
-        }
-        const off = mis[c]!.offsetInChunk;
-        if (pickedTopic === -1 || off < pickedOffset) {
-          pickedTopic = t;
-          pickedOffset = off;
-        }
+    // K-way merge by offsetInChunk across topics, via a min-heap.
+    // Mirrors go/sort_and_filter.go's MessageIndexHeap-based merge: O(N log K)
+    // regardless of how many topics share a group.
+    const heap = new MessageHeap<{ topicSlot: number; cursor: number }>(false);
+    for (let t = 0; t < topicIndexes.length; t++) {
+      const mis = topicIndexes[t]!.messageIndexes;
+      if (mis.length === 0) {
+        continue;
       }
-      if (pickedTopic === -1) {
-        break;
+      heap.push(mis[0]!.offsetInChunk, { topicSlot: t, cursor: 0 });
+    }
+    while (heap.size > 0) {
+      const top = heap.pop()!;
+      const { topicSlot, cursor } = top.value;
+      const ti = topicIndexes[topicSlot]!;
+      sorted[writeIdx++] = { topicId: ti.id, mi: ti.messageIndexes[cursor]! };
+      const next = cursor + 1;
+      if (next < ti.messageIndexes.length) {
+        heap.push(ti.messageIndexes[next]!.offsetInChunk, {
+          topicSlot,
+          cursor: next,
+        });
       }
-      const ti = topicIndexes[pickedTopic]!;
-      const cur = cursors[pickedTopic]!;
-      sorted[writeIdx++] = { topicId: ti.id, mi: ti.messageIndexes[cur]! };
-      cursors[pickedTopic] = cur + 1;
     }
   }
 

@@ -1,13 +1,14 @@
-// Cost-aware per-group iterator: all bytes pre-fetched into LoadedBytes;
-// per-chunk kept-message lists pre-computed at setup time. Mirrors
-// go/cost_aware_group_iterator.go.
+// Preloaded topics-group iterator: all bytes pre-fetched into LoadedBytes;
+// per-chunk kept-message lists pre-computed at setup time. Used by the
+// cost-aware read path. Counterpart to TopicsGroupIterator (lazy default
+// path). Mirrors go/preloaded_topics_group_iterator.go.
 
 import type { Decompressor } from "../compression.js";
 import type { LoadedBytes } from "../loaded_bytes.js";
 import type { MessageRef } from "../sort_and_filter.js";
 import type { IndexChunk } from "../types.js";
 
-export class CostAwareGroupIterator {
+export class PreloadedTopicsGroupIterator {
   private readonly isCompressed: boolean;
   private readonly reverse: boolean;
   private readonly indexChunks: IndexChunk[];
@@ -77,7 +78,7 @@ export class CostAwareGroupIterator {
         );
         if (compressed === undefined) {
           throw new Error(
-            `cost-aware iterator: missing compressed chunk at offset ${this.indexChunks[this.chunkIdx]!.chunkOffset}`,
+            `preloaded iterator: missing compressed chunk at offset ${this.indexChunks[this.chunkIdx]!.chunkOffset}`,
           );
         }
         this.currentDecompressed = this.decompress(compressed);
@@ -97,7 +98,7 @@ export class CostAwareGroupIterator {
         const got = this.loadedData.get(chunkOffset + msg.offsetInChunk);
         if (got === undefined) {
           throw new Error(
-            `cost-aware iterator: missing message bytes at offset ${chunkOffset + msg.offsetInChunk}`,
+            `preloaded iterator: missing message bytes at offset ${chunkOffset + msg.offsetInChunk}`,
           );
         }
         data = got;
