@@ -1,6 +1,6 @@
 """Iterator primitives shared by the default-path and cost-aware reader paths.
 
-  sort_and_filter_merge: per-chunk pass that sorts MessageIndexes from all
+  sort_and_filter: per-chunk pass that sorts MessageIndexes from all
     topics by offset, computes per-message lengths from offset deltas, and
     filters by topic id + timestamp range.
 
@@ -33,7 +33,7 @@ class _MsgIdxWithTopicId:
         self.message_index = message_index
 
 
-def sort_and_filter_merge(
+def sort_and_filter(
     topic_indexes: List[_codec.TopicIndex],
     total_len: int,
     topic_ids: Set[int],
@@ -173,7 +173,7 @@ class TopicsGroupIterator:
             index_chunk = self._load_index_chunk(info, length)
             self._current_index_chunk += self._increment
 
-            self._filtered_msgs, self._filtered_lens = sort_and_filter_merge(
+            self._filtered_msgs, self._filtered_lens = sort_and_filter(
                 index_chunk.topic_indexes,
                 index_chunk.uncompressed_len,
                 self._topic_ids,

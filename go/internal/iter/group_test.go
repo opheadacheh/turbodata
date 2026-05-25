@@ -7,7 +7,7 @@ import (
 )
 
 // TestTopicsGroupIterator_IntraGroupTopicFilter verifies the topicIds filter inside
-// sortAndFilterMerge. Unlike TestNextIntoTopicNameFilter (which puts each
+// sortAndFilter. Unlike TestNextIntoTopicNameFilter (which puts each
 // topic in its own separate group), this test places both topics in the same group
 // so the per-message topic filter is actually exercised.
 func TestTopicsGroupIterator_IntraGroupTopicFilter(t *testing.T) {
@@ -43,7 +43,7 @@ func TestTopicsGroupIterator_IntraGroupTopicFilter(t *testing.T) {
 }
 
 // TestTopicsGroupIterator_PerMessageTimestampFilter verifies the per-message timestamp
-// checks inside sortAndFilterMerge. TestNextIntoTimestampRange uses one message
+// checks inside sortAndFilter. TestNextIntoTimestampRange uses one message
 // per chunk so the chunk-level filter handles everything; here all messages land in a
 // single chunk so the boundary messages must be dropped at the message level.
 func TestTopicsGroupIterator_PerMessageTimestampFilter(t *testing.T) {

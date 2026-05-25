@@ -203,14 +203,14 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 	}
 	loadedIndex := iorange.NewLoadedBytes(rangesA, locA, bufsA)
 
-	// ---- Decode each index chunk; run sortAndFilterMerge to learn kept messages.
+	// ---- Decode each index chunk; run sortAndFilter to learn kept messages.
 	type decodedChunk struct {
 		indexChunk  *format.IndexChunk
 		messages    []*messageIndexWithTopicId
 		messageLens []int64
 	}
 	perGroupChunks := make([][]decodedChunk, len(scoped))
-	// Reused across all index chunks: ReadIndexChunk + sortAndFilterMerge copy
+	// Reused across all index chunks: ReadIndexChunk + sortAndFilter copy
 	// every value they need out of the decompressed bytes (no aliasing into
 	// the buffer), so a single scratch buffer suffices. The merge scratch is
 	// also shared across chunks; output slices are allocated fresh per chunk
@@ -230,7 +230,7 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 			}
 			var msgs []*messageIndexWithTopicId
 			var lens []int64
-			sortAndFilterMerge(
+			sortAndFilter(
 				ic.TopicIndexes,
 				ic.UncompressedLen,
 				topicIds,

@@ -21,7 +21,7 @@ from ._iter import (
     TopicsGroupIterator,
     _MsgIdxWithTopicId,
     _filter_index_chunks_in_range,
-    sort_and_filter_merge,
+    sort_and_filter,
 )
 from ._sample import SampleSpec, sample as _sample
 from .errors import FileTooSmallError, InvalidMagicError, SampleValidationError
@@ -279,7 +279,7 @@ class Reader:
                 raw = loaded_index.get(info.offset)
                 decompressed = _compress.decompress(raw)
                 ic = _codec.read_index_chunk_from_bytes(decompressed)
-                msgs, m_lens = sort_and_filter_merge(
+                msgs, m_lens = sort_and_filter(
                     ic.topic_indexes,
                     ic.uncompressed_len,
                     topic_ids,

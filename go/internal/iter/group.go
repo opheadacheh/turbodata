@@ -109,7 +109,7 @@ func (it *TopicsGroupIterator) Next() (int64, uint16, []byte, error) {
 		}
 		it.currentIndexChunkInfoIndex += it.incrementFactor
 
-		sortAndFilterMerge(
+		sortAndFilter(
 			indexChunk.TopicIndexes,
 			indexChunk.UncompressedLen,
 			it.topicIds,

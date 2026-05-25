@@ -8,7 +8,7 @@ import (
 )
 
 // sortAndFilterMergeScratch bundles the reusable working state for
-// sortAndFilterMerge. A single scratch can be shared across many calls; it
+// sortAndFilter. A single scratch can be shared across many calls; it
 // owns no per-call data once a call returns.
 type sortAndFilterMergeScratch struct {
 	sortHeap    *MessageIndexHeap
@@ -37,7 +37,7 @@ func newSortAndFilterMergeScratch() *sortAndFilterMergeScratch {
 	return s
 }
 
-// sortAndFilterMerge computes the kept-message list for a single decoded
+// sortAndFilter computes the kept-message list for a single decoded
 // IndexChunk in one pass:
 //   - sorts MessageIndexes from all topics in offset order (matches the
 //     writer's interleaving, which equals timestamp order),
@@ -52,7 +52,7 @@ func newSortAndFilterMergeScratch() *sortAndFilterMergeScratch {
 //
 // This single function serves both the per-Next() hot path in
 // TopicsGroupIterator and the per-chunk setup in prepareCostAware.
-func sortAndFilterMerge(
+func sortAndFilter(
 	topicIndexes []*format.TopicIndex,
 	totalLen int64,
 	topicIds map[uint16]struct{},

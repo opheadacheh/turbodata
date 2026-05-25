@@ -103,7 +103,7 @@ class TestNextTopicNameFilter:
 # Topic-name filter: same group (exercises intra-chunk filter)
 # ---------------------------------------------------------------------------
 class TestIntraGroupTopicFilter:
-    """Same-group filter exercises sort_and_filter_merge's topic_ids check,
+    """Same-group filter exercises sort_and_filter's topic_ids check,
     not just the group-level skip in newTopicsGroupIterator."""
 
     def test_same_group_one_topic_kept(self):
@@ -144,7 +144,7 @@ class TestNextTimestampRange:
 
 class TestPerMessageTimestampFilter:
     """All messages in one chunk so boundary messages are dropped by the
-    per-message filter inside sort_and_filter_merge."""
+    per-message filter inside sort_and_filter."""
 
     def test_filters_boundary_messages_within_one_chunk(self):
         def setup(w: Writer) -> None:
