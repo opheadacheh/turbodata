@@ -1,8 +1,10 @@
-package turbodata
+package compress
 
 import (
 	"bytes"
 	"testing"
+
+	"turbodata/internal/buffer"
 )
 
 func TestCompressDecompressRoundTrip(t *testing.T) {
@@ -24,15 +26,15 @@ func TestCompressDecompressRoundTrip(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			compressed, err := compress(tc.payload)
+			compressed, err := Compress(tc.payload)
 			if err != nil {
-				t.Errorf("compress: %v", err)
+				t.Errorf("Compress: %v", err)
 				return
 			}
 
-			decompressed, err := decompress(compressed)
+			decompressed, err := Decompress(compressed)
 			if err != nil {
-				t.Errorf("decompress: %v", err)
+				t.Errorf("Decompress: %v", err)
 				return
 			}
 
@@ -44,14 +46,14 @@ func TestCompressDecompressRoundTrip(t *testing.T) {
 }
 
 func TestCompressInto(t *testing.T) {
-	payload := []byte("payload for compressInto")
-	buffer := &ReusableBuffer{Data: []byte("junk data that should be reset")}
+	payload := []byte("payload for CompressInto")
+	buf := &buffer.ReusableBuffer{Data: []byte("junk data that should be reset")}
 
-	compressInto(payload, buffer)
+	CompressInto(payload, buf)
 
-	decompressed, err := decompress(buffer.Data)
+	decompressed, err := Decompress(buf.Data)
 	if err != nil {
-		t.Errorf("decompress after compressInto: %v", err)
+		t.Errorf("Decompress after CompressInto: %v", err)
 		return
 	}
 
@@ -61,42 +63,42 @@ func TestCompressInto(t *testing.T) {
 }
 
 func TestDecompressInto(t *testing.T) {
-	payload := []byte("payload for decompressInto")
-	compressed, err := compress(payload)
+	payload := []byte("payload for DecompressInto")
+	compressed, err := Compress(payload)
 	if err != nil {
-		t.Errorf("compress: %v", err)
+		t.Errorf("Compress: %v", err)
 		return
 	}
 
-	buffer := &ReusableBuffer{Data: []byte("junk data that should be reset")}
-	err = decompressInto(compressed, buffer)
+	buf := &buffer.ReusableBuffer{Data: []byte("junk data that should be reset")}
+	err = DecompressInto(compressed, buf)
 	if err != nil {
-		t.Errorf("decompressInto: %v", err)
+		t.Errorf("DecompressInto: %v", err)
 		return
 	}
 
-	if !bytes.Equal(payload, buffer.Data) {
-		t.Errorf("decompressInto output mismatch: want %v, got %v", payload, buffer.Data)
+	if !bytes.Equal(payload, buf.Data) {
+		t.Errorf("DecompressInto output mismatch: want %v, got %v", payload, buf.Data)
 	}
 }
 
 func TestDecompressInvalidData(t *testing.T) {
 	invalid := []byte("this is not zstd data")
 
-	_, err := decompress(invalid)
+	_, err := Decompress(invalid)
 	if err == nil {
-		t.Errorf("decompress should fail for invalid input, got nil error")
+		t.Errorf("Decompress should fail for invalid input, got nil error")
 		return
 	}
 }
 
 func TestDecompressIntoInvalidData(t *testing.T) {
 	invalid := []byte("this is not zstd data")
-	buffer := &ReusableBuffer{Data: []byte("junk")}
+	buf := &buffer.ReusableBuffer{Data: []byte("junk")}
 
-	err := decompressInto(invalid, buffer)
+	err := DecompressInto(invalid, buf)
 	if err == nil {
-		t.Errorf("decompressInto should fail for invalid input, got nil error")
+		t.Errorf("DecompressInto should fail for invalid input, got nil error")
 		return
 	}
 }

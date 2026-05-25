@@ -1,4 +1,4 @@
-package turbodata
+package iorange
 
 import (
 	"math"
@@ -7,7 +7,7 @@ import (
 )
 
 func TestPlanEmpty(t *testing.T) {
-	ops, locs := Plan(nil, ReadStrategy{CoalesceGap: 16, SplitThreshold: math.MaxInt64, MaxConcurrency: 1})
+	ops, locs := Plan(nil, 16, math.MaxInt64)
 	if len(ops) != 0 {
 		t.Fatalf("expected no ops, got %d", len(ops))
 	}
@@ -18,7 +18,7 @@ func TestPlanEmpty(t *testing.T) {
 
 func TestPlanSingleRange(t *testing.T) {
 	ranges := []Range{{Offset: 100, Length: 50}}
-	ops, locs := Plan(ranges, ReadStrategy{CoalesceGap: 0, SplitThreshold: math.MaxInt64})
+	ops, locs := Plan(ranges, 0, math.MaxInt64)
 	if len(ops) != 1 {
 		t.Fatalf("expected 1 op, got %d", len(ops))
 	}
@@ -32,11 +32,11 @@ func TestPlanSingleRange(t *testing.T) {
 
 func TestPlanCoalesceTable(t *testing.T) {
 	tests := []struct {
-		name         string
-		ranges       []Range
-		coalesceGap  int64
-		wantOps      []ReadOp
-		wantLocs     []RangeLocation
+		name        string
+		ranges      []Range
+		coalesceGap int64
+		wantOps     []ReadOp
+		wantLocs    []RangeLocation
 	}{
 		{
 			name:        "no coalesce when gap >= threshold",
@@ -74,7 +74,7 @@ func TestPlanCoalesceTable(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ops, locs := Plan(tc.ranges, ReadStrategy{CoalesceGap: tc.coalesceGap, SplitThreshold: math.MaxInt64})
+			ops, locs := Plan(tc.ranges, tc.coalesceGap, math.MaxInt64)
 			if !reflect.DeepEqual(ops, tc.wantOps) {
 				t.Errorf("ops mismatch:\n got %+v\nwant %+v", ops, tc.wantOps)
 			}
@@ -142,7 +142,7 @@ func TestPlanSplitTable(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ops, locs := Plan(tc.ranges, ReadStrategy{CoalesceGap: tc.coalesceGap, SplitThreshold: tc.splitThreshold})
+			ops, locs := Plan(tc.ranges, tc.coalesceGap, tc.splitThreshold)
 			if !reflect.DeepEqual(ops, tc.wantOps) {
 				t.Errorf("ops mismatch:\n got %+v\nwant %+v", ops, tc.wantOps)
 			}
@@ -150,7 +150,6 @@ func TestPlanSplitTable(t *testing.T) {
 			// buffer at locs[i], spans the original Offset..Offset+Length.
 			for i, r := range tc.ranges {
 				op := ops[locs[i].OpIndex]
-				// The range's absolute start should equal op.Offset + InOpOff.
 				if op.Offset+int64(locs[i].InOpOff) != r.Offset {
 					t.Errorf("range[%d]: location maps to absolute %d, want %d", i, op.Offset+int64(locs[i].InOpOff), r.Offset)
 				}
@@ -168,8 +167,8 @@ func TestPlanSplitDisabled(t *testing.T) {
 		{Offset: 100, Length: 100},
 		{Offset: 200, Length: 100},
 	}
-	// SplitThreshold=0 means "no splitting"; the merged group emits as one op.
-	ops, _ := Plan(ranges, ReadStrategy{CoalesceGap: 1, SplitThreshold: 0})
+	// splitThreshold=0 means "no splitting"; the merged group emits as one op.
+	ops, _ := Plan(ranges, 1, 0)
 	if len(ops) != 1 {
 		t.Fatalf("expected 1 op when splits disabled, got %d", len(ops))
 	}

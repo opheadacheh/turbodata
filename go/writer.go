@@ -6,6 +6,10 @@ import (
 	"fmt"
 	"io"
 	"math"
+
+	"turbodata/format"
+	"turbodata/internal/buffer"
+	"turbodata/internal/compress"
 )
 
 type WriterConfig struct {
@@ -20,24 +24,24 @@ type Writer struct {
 	w           io.Writer
 	bw          *bufio.Writer
 	buf         *bytes.Buffer
-	compressBuf *ReusableBuffer
+	compressBuf *buffer.ReusableBuffer
 
 	// Chunk-level state.
 	chunkStatus        *ChunkStatus
-	idToMessageIndexes map[uint16][]*MessageIndex
+	idToMessageIndexes map[uint16][]*format.MessageIndex
 
 	// Topic-level state.
 	lastTimestamp int64
 	isTopicOpen   bool
 	writerConfig  *WriterConfig
-	indexChunks   []*IndexChunk
+	indexChunks   []*format.IndexChunk
 
 	// File-level state.
 	offset          int64
 	currentTopicId  uint16
-	footer          *Footer
-	summary         *Summary
-	indexChunksList [][]*IndexChunk
+	footer          *format.Footer
+	summary         *format.Summary
+	indexChunksList [][]*format.IndexChunk
 }
 
 func NewWriter(w io.Writer) *Writer {
@@ -45,17 +49,17 @@ func NewWriter(w io.Writer) *Writer {
 	return &Writer{
 		w:  bw,
 		bw: bw,
-		footer: &Footer{
-			Magic: [5]byte{'7', 'U', 'R', 'B', '0'},
+		footer: &format.Footer{
+			Magic: format.Magic,
 		},
-		summary: &Summary{
-			TopicsInfos: []*TopicsInfo{},
+		summary: &format.Summary{
+			TopicsInfos: []*format.TopicsInfo{},
 		},
 		buf: bytes.NewBuffer(nil),
-		compressBuf: &ReusableBuffer{
+		compressBuf: &buffer.ReusableBuffer{
 			Data: make([]byte, 0),
 		},
-		idToMessageIndexes: make(map[uint16][]*MessageIndex),
+		idToMessageIndexes: make(map[uint16][]*format.MessageIndex),
 	}
 }
 
@@ -81,12 +85,12 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 		}
 	}
 
-	topicMedatas := make([]*TopicMetadata, len(names))
+	topicMedatas := make([]*format.TopicMetadata, len(names))
 	namesToIds := make(map[string]uint16)
 	topicIds := make([]uint16, len(names))
 	for i := range names {
 		w.currentTopicId++
-		topicMedatas[i] = &TopicMetadata{
+		topicMedatas[i] = &format.TopicMetadata{
 			Id:       w.currentTopicId,
 			Name:     names[i],
 			Metadata: metadatas[i],
@@ -94,12 +98,12 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 
 		namesToIds[names[i]] = w.currentTopicId
 		topicIds[i] = w.currentTopicId
-		w.idToMessageIndexes[w.currentTopicId] = []*MessageIndex{}
+		w.idToMessageIndexes[w.currentTopicId] = []*format.MessageIndex{}
 	}
 
-	w.summary.TopicsInfos = append(w.summary.TopicsInfos, &TopicsInfo{
+	w.summary.TopicsInfos = append(w.summary.TopicsInfos, &format.TopicsInfo{
 		TopicMetadatas:     topicMedatas,
-		IndexChunkInfoList: []*IndexChunkInfo{},
+		IndexChunkInfoList: []*format.IndexChunkInfo{},
 		TotalLen:           0,
 	})
 
@@ -146,7 +150,7 @@ func (w *Writer) WriteMessage(topicName string, message []byte, timestamp int64)
 	}
 
 	w.lastTimestamp = timestamp
-	w.idToMessageIndexes[id] = append(w.idToMessageIndexes[id], &MessageIndex{
+	w.idToMessageIndexes[id] = append(w.idToMessageIndexes[id], &format.MessageIndex{
 		Timestamp:     timestamp,
 		OffsetInChunk: int64(w.buf.Len()),
 	})
@@ -189,7 +193,7 @@ func (w *Writer) CloseTopic() error {
 	}
 
 	w.indexChunksList = append(w.indexChunksList, w.indexChunks)
-	w.indexChunks = []*IndexChunk{}
+	w.indexChunks = []*format.IndexChunk{}
 	return nil
 }
 
@@ -197,27 +201,27 @@ func (w *Writer) writeChunk() error {
 	var bytes []byte
 	uncompressedLen := int64(w.buf.Len())
 	if w.writerConfig.isCompressed {
-		compressInto(w.buf.Bytes(), w.compressBuf)
+		compress.CompressInto(w.buf.Bytes(), w.compressBuf)
 		bytes = w.compressBuf.Data
 	} else {
 		bytes = w.buf.Bytes()
 	}
 
-	topicIndexes := make([]*TopicIndex, 0, len(w.writerConfig.topicIds))
+	topicIndexes := make([]*format.TopicIndex, 0, len(w.writerConfig.topicIds))
 	for _, id := range w.writerConfig.topicIds {
 		messageIndexes := w.idToMessageIndexes[id]
 		if len(messageIndexes) == 0 {
 			continue
 		}
-		topicIndexes = append(topicIndexes, &TopicIndex{
+		topicIndexes = append(topicIndexes, &format.TopicIndex{
 			Id:              id,
 			MessageIndexes:  messageIndexes,
 			KeyFrameIndexes: []uint32{},
 		})
-		w.idToMessageIndexes[id] = []*MessageIndex{}
+		w.idToMessageIndexes[id] = []*format.MessageIndex{}
 	}
 
-	w.indexChunks = append(w.indexChunks, &IndexChunk{
+	w.indexChunks = append(w.indexChunks, &format.IndexChunk{
 		TopicIndexes:    topicIndexes,
 		ChunkOffset:     w.offset,
 		ChunkLen:        int64(len(bytes)),
@@ -245,11 +249,11 @@ func (w *Writer) writeIndexChunks() error {
 	for i, indexChunks := range w.indexChunksList {
 		totalLen := int64(0)
 		for _, indexChunk := range indexChunks {
-			if err := WriteIndexChunk(w.buf, indexChunk); err != nil {
+			if err := format.WriteIndexChunk(w.buf, indexChunk); err != nil {
 				return err
 			}
 
-			compressInto(w.buf.Bytes(), w.compressBuf)
+			compress.CompressInto(w.buf.Bytes(), w.compressBuf)
 			compressed := w.compressBuf.Data
 			w.buf.Reset()
 
@@ -264,7 +268,7 @@ func (w *Writer) writeIndexChunks() error {
 				}
 			}
 
-			w.summary.TopicsInfos[i].IndexChunkInfoList = append(w.summary.TopicsInfos[i].IndexChunkInfoList, &IndexChunkInfo{
+			w.summary.TopicsInfos[i].IndexChunkInfoList = append(w.summary.TopicsInfos[i].IndexChunkInfoList, &format.IndexChunkInfo{
 				StartTimestamp: startTimestamp,
 				EndTimestamp:   endTimestamp,
 				Offset:         w.offset,
@@ -286,10 +290,10 @@ func (w *Writer) writeIndexChunks() error {
 }
 
 func (w *Writer) writeSummary() error {
-	if err := WriteSummary(w.buf, w.summary); err != nil {
+	if err := format.WriteSummary(w.buf, w.summary); err != nil {
 		return err
 	}
-	compressInto(w.buf.Bytes(), w.compressBuf)
+	compress.CompressInto(w.buf.Bytes(), w.compressBuf)
 	compressed := w.compressBuf.Data
 	w.buf.Reset()
 
@@ -306,7 +310,7 @@ func (w *Writer) writeSummary() error {
 }
 
 func (w *Writer) writeFooter() error {
-	if err := WriteFooter(w.w, w.footer); err != nil {
+	if err := format.WriteFooter(w.w, w.footer); err != nil {
 		return err
 	}
 	return nil

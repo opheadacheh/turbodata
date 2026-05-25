@@ -1,17 +1,21 @@
-package turbodata
+package iter
 
 import (
 	"bytes"
 	"io"
+
+	"turbodata/format"
+	"turbodata/internal/buffer"
+	"turbodata/internal/compress"
 )
 
 type TopicsGroupIterator struct {
 	rs io.ReadSeeker
 
 	// Memory buffers.
-	loadBuf     *ReusableBuffer
-	IndexBuf    *ReusableBuffer
-	messageBuf  *ReusableBuffer
+	loadBuf     *buffer.ReusableBuffer
+	indexBuf    *buffer.ReusableBuffer
+	messageBuf  *buffer.ReusableBuffer
 	bytesReader *bytes.Reader
 
 	// Sort/filter scratch + outputs (reused per chunk).
@@ -28,7 +32,7 @@ type TopicsGroupIterator struct {
 	incrementFactor int
 
 	// Index chunk queue.
-	indexChunkInfoList         []*IndexChunkInfo
+	indexChunkInfoList         []*format.IndexChunkInfo
 	indexChunkInfoLens         []int64
 	currentIndexChunkInfoIndex int
 
@@ -36,15 +40,15 @@ type TopicsGroupIterator struct {
 	currentMessageIndex int
 }
 
-func newTopicsGroupIterator(it *MessageIterator, topicIds map[uint16]struct{}, topicsInfo *TopicsInfo) *TopicsGroupIterator {
-	indexChunkInfoList := make([]*IndexChunkInfo, 0, len(topicsInfo.IndexChunkInfoList))
+func newTopicsGroupIterator(it *MessageIterator, topicIds map[uint16]struct{}, topicsInfo *format.TopicsInfo) *TopicsGroupIterator {
+	indexChunkInfoList := make([]*format.IndexChunkInfo, 0, len(topicsInfo.IndexChunkInfoList))
 	indexChunkInfoLens := make([]int64, 0, len(topicsInfo.IndexChunkInfoList))
 	for i, indexChunkInfo := range topicsInfo.IndexChunkInfoList {
-		if indexChunkInfo.EndTimestamp < it.startTimestamp {
+		if indexChunkInfo.EndTimestamp < it.StartTimestamp {
 			continue
 		}
 
-		if indexChunkInfo.StartTimestamp > it.endTimestamp {
+		if indexChunkInfo.StartTimestamp > it.EndTimestamp {
 			break
 		}
 
@@ -63,7 +67,7 @@ func newTopicsGroupIterator(it *MessageIterator, topicIds map[uint16]struct{}, t
 
 	incrementFactor := 1
 	currentIndexChunkInfoIndex := 0
-	if it.order == ReverseTimeOrder {
+	if it.Order == ReverseTimeOrder {
 		incrementFactor = -1
 		currentIndexChunkInfoIndex = len(indexChunkInfoList) - 1
 	}
@@ -71,9 +75,9 @@ func newTopicsGroupIterator(it *MessageIterator, topicIds map[uint16]struct{}, t
 	return &TopicsGroupIterator{
 		rs: it.rs,
 
-		loadBuf:     NewReusableBuffer(),
-		IndexBuf:    NewReusableBuffer(),
-		messageBuf:  NewReusableBuffer(),
+		loadBuf:     buffer.NewReusableBuffer(),
+		indexBuf:    buffer.NewReusableBuffer(),
+		messageBuf:  buffer.NewReusableBuffer(),
 		bytesReader: bytes.NewReader(nil),
 
 		scratch:                newSortAndFilterMergeScratch(),
@@ -81,9 +85,9 @@ func newTopicsGroupIterator(it *MessageIterator, topicIds map[uint16]struct{}, t
 		filteredMessageLens:    make([]int64, 0),
 
 		topicIds:        topicIds,
-		startTimestamp:  it.startTimestamp,
-		endTimestamp:    it.endTimestamp,
-		order:           it.order,
+		startTimestamp:  it.StartTimestamp,
+		endTimestamp:    it.EndTimestamp,
+		order:           it.Order,
 		isCompressed:    isCompressed,
 		incrementFactor: incrementFactor,
 
@@ -135,42 +139,42 @@ func (it *TopicsGroupIterator) Next() (int64, uint16, []byte, error) {
 	return messageIndex.messageIndex.Timestamp, messageIndex.topicId, it.messageBuf.Data[messageIndex.messageIndex.OffsetInChunk:rangeEnd], nil
 }
 
-func (it *TopicsGroupIterator) loadIndexChunk(info *IndexChunkInfo, len int64) (*IndexChunk, error) {
+func (it *TopicsGroupIterator) loadIndexChunk(info *format.IndexChunkInfo, length int64) (*format.IndexChunk, error) {
 	if _, err := it.rs.Seek(info.Offset, io.SeekStart); err != nil {
 		return nil, err
 	}
-	it.loadBuf.Prepare(int(len))
+	it.loadBuf.Prepare(int(length))
 
 	if _, err := io.ReadFull(it.rs, it.loadBuf.Data); err != nil {
 		return nil, err
 	}
 
-	if err := decompressInto(it.loadBuf.Data, it.IndexBuf); err != nil {
+	if err := compress.DecompressInto(it.loadBuf.Data, it.indexBuf); err != nil {
 		return nil, err
 	}
 
-	it.bytesReader.Reset(it.IndexBuf.Data)
-	return ReadIndexChunk(it.bytesReader)
+	it.bytesReader.Reset(it.indexBuf.Data)
+	return format.ReadIndexChunk(it.bytesReader)
 }
 
-func (it *TopicsGroupIterator) loadDataChunk(offset int64, len int64) error {
+func (it *TopicsGroupIterator) loadDataChunk(offset int64, length int64) error {
 	if _, err := it.rs.Seek(offset, io.SeekStart); err != nil {
 		return err
 	}
 
 	if it.isCompressed {
-		it.loadBuf.Prepare(int(len))
+		it.loadBuf.Prepare(int(length))
 		if _, err := io.ReadFull(it.rs, it.loadBuf.Data); err != nil {
 			return err
 		}
 
-		if err := decompressInto(it.loadBuf.Data, it.messageBuf); err != nil {
+		if err := compress.DecompressInto(it.loadBuf.Data, it.messageBuf); err != nil {
 			return err
 		}
 		return nil
 	}
 
-	it.messageBuf.Prepare(int(len))
+	it.messageBuf.Prepare(int(length))
 	if _, err := io.ReadFull(it.rs, it.messageBuf.Data); err != nil {
 		return err
 	}

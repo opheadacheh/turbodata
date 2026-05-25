@@ -1,4 +1,4 @@
-package turbodata
+package iorange
 
 // LoadedBytes holds bytes that were pre-fetched in one or more ReadOps and
 // provides flat offset-based lookup back to the original requested ranges.

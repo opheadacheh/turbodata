@@ -1,4 +1,4 @@
-package turbodata
+package readstrategy
 
 import (
 	"math"

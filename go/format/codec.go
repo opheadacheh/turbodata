@@ -1,4 +1,4 @@
-package turbodata
+package format
 
 import (
 	"encoding/binary"
@@ -103,6 +103,7 @@ func ReadTopicMetadata(r io.Reader) (*TopicMetadata, error) {
 	}
 	return topicMetadata, nil
 }
+
 func WriteTopicMetadata(w io.Writer, topicMetadata *TopicMetadata) error {
 	if err := binary.Write(w, binary.BigEndian, topicMetadata.Id); err != nil {
 		return err

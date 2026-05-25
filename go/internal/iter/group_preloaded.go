@@ -1,6 +1,13 @@
-package turbodata
+package iter
 
-import "io"
+import (
+	"io"
+
+	"turbodata/format"
+	"turbodata/internal/buffer"
+	"turbodata/internal/compress"
+	"turbodata/internal/iorange"
+)
 
 // preloadedTopicsGroupIterator yields messages from one topic group when the reader
 // runs on the cost-aware path. All bytes the group needs have been pre-fetched
@@ -10,14 +17,14 @@ type preloadedTopicsGroupIterator struct {
 	isCompressed bool
 	order        Order
 
-	indexChunks   []*IndexChunk
+	indexChunks   []*format.IndexChunk
 	chunkMessages [][]*messageIndexWithTopicId // parallel to indexChunks
 	chunkMsgLens  [][]int64                    // parallel to indexChunks
 
-	loadedData *LoadedBytes
+	loadedData *iorange.LoadedBytes
 
 	// Reused across chunks; only allocated when isCompressed.
-	decompressBuf *ReusableBuffer
+	decompressBuf *buffer.ReusableBuffer
 
 	// Iteration state.
 	chunkIdx       int // current chunk being consumed
@@ -28,10 +35,10 @@ type preloadedTopicsGroupIterator struct {
 func newPreloadedTopicsGroupIterator(
 	isCompressed bool,
 	order Order,
-	indexChunks []*IndexChunk,
+	indexChunks []*format.IndexChunk,
 	chunkMessages [][]*messageIndexWithTopicId,
 	chunkMsgLens [][]int64,
-	loadedData *LoadedBytes,
+	loadedData *iorange.LoadedBytes,
 ) *preloadedTopicsGroupIterator {
 	it := &preloadedTopicsGroupIterator{
 		isCompressed:   isCompressed,
@@ -43,7 +50,7 @@ func newPreloadedTopicsGroupIterator(
 		loadedChunkIdx: -1,
 	}
 	if isCompressed {
-		it.decompressBuf = NewReusableBuffer()
+		it.decompressBuf = buffer.NewReusableBuffer()
 	}
 	if order == ReverseTimeOrder {
 		it.chunkIdx = len(indexChunks) - 1
@@ -76,7 +83,7 @@ func (it *preloadedTopicsGroupIterator) Next() (int64, uint16, []byte, error) {
 		// Materialize this chunk's compressed buffer on first touch.
 		if it.isCompressed && it.loadedChunkIdx != it.chunkIdx {
 			compressed := it.loadedData.Get(it.indexChunks[it.chunkIdx].ChunkOffset)
-			if err := decompressInto(compressed, it.decompressBuf); err != nil {
+			if err := compress.DecompressInto(compressed, it.decompressBuf); err != nil {
 				return 0, 0, nil, err
 			}
 			it.loadedChunkIdx = it.chunkIdx

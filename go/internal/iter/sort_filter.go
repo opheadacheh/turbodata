@@ -1,8 +1,10 @@
-package turbodata
+package iter
 
 import (
 	"container/heap"
 	"sync"
+
+	"turbodata/format"
 )
 
 // sortAndFilterMergeScratch bundles the reusable working state for
@@ -10,7 +12,7 @@ import (
 // owns no per-call data once a call returns.
 type sortAndFilterMergeScratch struct {
 	sortHeap    *MessageIndexHeap
-	idToIndexes map[uint16][]*MessageIndex
+	idToIndexes map[uint16][]*format.MessageIndex
 	idToCursor  map[uint16]int
 
 	// Sorted-but-not-yet-filtered working slices. Capacity grows; never shrinks.
@@ -27,7 +29,7 @@ type sortAndFilterMergeScratch struct {
 func newSortAndFilterMergeScratch() *sortAndFilterMergeScratch {
 	s := &sortAndFilterMergeScratch{
 		sortHeap:    &MessageIndexHeap{},
-		idToIndexes: make(map[uint16][]*MessageIndex),
+		idToIndexes: make(map[uint16][]*format.MessageIndex),
 		idToCursor:  make(map[uint16]int),
 	}
 	heap.Init(s.sortHeap)
@@ -51,7 +53,7 @@ func newSortAndFilterMergeScratch() *sortAndFilterMergeScratch {
 // This single function serves both the per-Next() hot path in
 // TopicsGroupIterator and the per-chunk setup in prepareCostAware.
 func sortAndFilterMerge(
-	topicIndexes []*TopicIndex,
+	topicIndexes []*format.TopicIndex,
 	totalLen int64,
 	topicIds map[uint16]struct{},
 	startTimestamp, endTimestamp int64,

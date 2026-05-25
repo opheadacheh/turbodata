@@ -1,9 +1,13 @@
-package turbodata
+package iter
 
 import (
 	"errors"
 	"io"
 	"testing"
+
+	"turbodata/format"
+	"turbodata/internal/compress"
+	"turbodata/internal/iorange"
 )
 
 func collectGroup(t *testing.T, it *preloadedTopicsGroupIterator) []testMsg {
@@ -29,7 +33,7 @@ func collectGroup(t *testing.T, it *preloadedTopicsGroupIterator) []testMsg {
 func mkMsg(ts int64, tid uint16, off int64) *messageIndexWithTopicId {
 	return &messageIndexWithTopicId{
 		topicId:      tid,
-		messageIndex: &MessageIndex{Timestamp: ts, OffsetInChunk: off},
+		messageIndex: &format.MessageIndex{Timestamp: ts, OffsetInChunk: off},
 	}
 }
 
@@ -52,17 +56,20 @@ func TestPreloadedTopicsGroupIteratorUncompressedForward(t *testing.T) {
 		[]byte("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"), // 50 bytes for msg[1]
 		[]byte("CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"),                     // 30 bytes for msg[2]
 	}
-	lb := &LoadedBytes{
-		buffers: bufs,
-		index: map[int64]bytesLocation{
-			chunkOff + 0:   {bufferIdx: 0, inBufOff: 0, length: 10},
-			chunkOff + 100: {bufferIdx: 1, inBufOff: 0, length: 50},
-			chunkOff + 250: {bufferIdx: 2, inBufOff: 0, length: 30},
-		},
+	ranges := []iorange.Range{
+		{Offset: chunkOff + 0, Length: 10},
+		{Offset: chunkOff + 100, Length: 50},
+		{Offset: chunkOff + 250, Length: 30},
 	}
-	ic := &IndexChunk{ChunkOffset: chunkOff, ChunkLen: 280, UncompressedLen: 280}
+	locs := []iorange.RangeLocation{
+		{OpIndex: 0, InOpOff: 0, Length: 10},
+		{OpIndex: 1, InOpOff: 0, Length: 50},
+		{OpIndex: 2, InOpOff: 0, Length: 30},
+	}
+	lb := iorange.NewLoadedBytes(ranges, locs, bufs)
+	ic := &format.IndexChunk{ChunkOffset: chunkOff, ChunkLen: 280, UncompressedLen: 280}
 
-	it := newPreloadedTopicsGroupIterator(false, TimeOrder, []*IndexChunk{ic}, [][]*messageIndexWithTopicId{msgs}, [][]int64{lens}, lb)
+	it := newPreloadedTopicsGroupIterator(false, TimeOrder, []*format.IndexChunk{ic}, [][]*messageIndexWithTopicId{msgs}, [][]int64{lens}, lb)
 	out := collectGroup(t, it)
 	if len(out) != 3 {
 		t.Fatalf("len=%d", len(out))
@@ -98,22 +105,26 @@ func TestPreloadedTopicsGroupIteratorUncompressedReverse(t *testing.T) {
 		[]byte("22222"),      // chunk2 msg[0] (5 bytes)
 		[]byte("33333"),      // chunk2 msg[1] (5 bytes)
 	}
-	lb := &LoadedBytes{
-		buffers: bufs,
-		index: map[int64]bytesLocation{
-			chunkOff1 + 0:  {bufferIdx: 0, inBufOff: 0, length: 10},
-			chunkOff1 + 10: {bufferIdx: 1, inBufOff: 0, length: 10},
-			chunkOff2 + 0:  {bufferIdx: 2, inBufOff: 0, length: 5},
-			chunkOff2 + 5:  {bufferIdx: 3, inBufOff: 0, length: 5},
-		},
+	ranges := []iorange.Range{
+		{Offset: chunkOff1 + 0, Length: 10},
+		{Offset: chunkOff1 + 10, Length: 10},
+		{Offset: chunkOff2 + 0, Length: 5},
+		{Offset: chunkOff2 + 5, Length: 5},
 	}
-	ic1 := &IndexChunk{ChunkOffset: chunkOff1, ChunkLen: 20, UncompressedLen: 20}
-	ic2 := &IndexChunk{ChunkOffset: chunkOff2, ChunkLen: 10, UncompressedLen: 10}
+	locs := []iorange.RangeLocation{
+		{OpIndex: 0, InOpOff: 0, Length: 10},
+		{OpIndex: 1, InOpOff: 0, Length: 10},
+		{OpIndex: 2, InOpOff: 0, Length: 5},
+		{OpIndex: 3, InOpOff: 0, Length: 5},
+	}
+	lb := iorange.NewLoadedBytes(ranges, locs, bufs)
+	ic1 := &format.IndexChunk{ChunkOffset: chunkOff1, ChunkLen: 20, UncompressedLen: 20}
+	ic2 := &format.IndexChunk{ChunkOffset: chunkOff2, ChunkLen: 10, UncompressedLen: 10}
 
 	it := newPreloadedTopicsGroupIterator(
 		false,
 		ReverseTimeOrder,
-		[]*IndexChunk{ic1, ic2},
+		[]*format.IndexChunk{ic1, ic2},
 		[][]*messageIndexWithTopicId{msgs1, msgs2},
 		[][]int64{{10, 10}, {5, 5}},
 		lb,
@@ -137,9 +148,9 @@ func TestPreloadedTopicsGroupIteratorCompressed(t *testing.T) {
 	// Build a synthetic "decompressed" payload of 30 bytes; messages of length
 	// 10 each at offsets 0, 10, 20.
 	uncompressed := []byte("AAAAAAAAAABBBBBBBBBBCCCCCCCCCC")
-	compressed, err := compress(uncompressed)
+	compressed, err := compress.Compress(uncompressed)
 	if err != nil {
-		t.Fatalf("compress: %v", err)
+		t.Fatalf("Compress: %v", err)
 	}
 
 	chunkOff := int64(500)
@@ -150,15 +161,16 @@ func TestPreloadedTopicsGroupIteratorCompressed(t *testing.T) {
 	}
 	lens := []int64{10, 10, 10}
 	bufs := [][]byte{compressed}
-	lb := &LoadedBytes{
-		buffers: bufs,
-		index: map[int64]bytesLocation{
-			chunkOff: {bufferIdx: 0, inBufOff: 0, length: len(compressed)},
-		},
+	ranges := []iorange.Range{
+		{Offset: chunkOff, Length: int64(len(compressed))},
 	}
-	ic := &IndexChunk{ChunkOffset: chunkOff, ChunkLen: int64(len(compressed)), UncompressedLen: int64(len(uncompressed))}
+	locs := []iorange.RangeLocation{
+		{OpIndex: 0, InOpOff: 0, Length: len(compressed)},
+	}
+	lb := iorange.NewLoadedBytes(ranges, locs, bufs)
+	ic := &format.IndexChunk{ChunkOffset: chunkOff, ChunkLen: int64(len(compressed)), UncompressedLen: int64(len(uncompressed))}
 
-	it := newPreloadedTopicsGroupIterator(true, TimeOrder, []*IndexChunk{ic}, [][]*messageIndexWithTopicId{msgs}, [][]int64{lens}, lb)
+	it := newPreloadedTopicsGroupIterator(true, TimeOrder, []*format.IndexChunk{ic}, [][]*messageIndexWithTopicId{msgs}, [][]int64{lens}, lb)
 	out := collectGroup(t, it)
 	if len(out) != 3 {
 		t.Fatalf("len=%d", len(out))
@@ -174,9 +186,19 @@ func TestPreloadedTopicsGroupIteratorCompressed(t *testing.T) {
 // TestPreloadedTopicsGroupIteratorEmpty verifies an empty group iterator returns EOF
 // without panicking.
 func TestPreloadedTopicsGroupIteratorEmpty(t *testing.T) {
-	it := newPreloadedTopicsGroupIterator(false, TimeOrder, nil, nil, nil, &LoadedBytes{index: map[int64]bytesLocation{}})
+	lb := iorange.NewLoadedBytes(nil, nil, nil)
+	it := newPreloadedTopicsGroupIterator(false, TimeOrder, nil, nil, nil, lb)
 	_, _, _, err := it.Next()
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("expected EOF, got %v", err)
 	}
+}
+
+// testMsg is a local helper struct mirroring the shape of test results used in
+// the root package's collect helper. Defined here so the in-package tests can
+// build it directly without depending on root.
+type testMsg struct {
+	ts   int64
+	name string
+	data []byte
 }

@@ -1,4 +1,4 @@
-package turbodata
+package iorange
 
 import (
 	"context"
@@ -7,17 +7,17 @@ import (
 	"sync"
 )
 
-// Fetcher executes a slice of ReadOps against a ReadSource concurrently and
+// Fetcher executes a slice of ReadOps against an io.ReaderAt concurrently and
 // returns one byte buffer per op, in input order. It is bound by a fixed
 // MaxConcurrency.
 type Fetcher struct {
-	rr      ReadSource
+	rr      io.ReaderAt
 	workers int
 }
 
 // NewFetcher returns a Fetcher backed by rr. maxConcurrency <= 0 is clamped
 // to 1 (serial execution).
-func NewFetcher(rr ReadSource, maxConcurrency int) *Fetcher {
+func NewFetcher(rr io.ReaderAt, maxConcurrency int) *Fetcher {
 	if maxConcurrency <= 0 {
 		maxConcurrency = 1
 	}

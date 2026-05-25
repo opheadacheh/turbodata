@@ -1,38 +1,61 @@
 package turbodata
 
-type ReadOption func(it *MessageIterator) error
+import (
+	"turbodata/internal/iter"
+	"turbodata/readstrategy"
+)
 
-type Order uint8
+// ReadOption configures a read invocation. The underlying parameter type is
+// intentionally opaque (an internal iterator); use the WithXxx helpers below
+// to construct options.
+type ReadOption func(it *iter.MessageIterator) error
+
+// Order controls the timestamp direction in which messages are produced.
+type Order = iter.Order
 
 const (
-	TimeOrder Order = iota
-	ReverseTimeOrder
+	TimeOrder        = iter.TimeOrder
+	ReverseTimeOrder = iter.ReverseTimeOrder
+)
+
+// ReadStrategy controls how the cost-aware reader path plans and executes I/O.
+// The canonical definition lives in the public readstrategy package; this
+// alias keeps the existing turbodata.ReadStrategy spelling working for
+// callers that don't want to import readstrategy directly.
+// See the helper constructors (StrategyForLatency, StrategyForMoney,
+// StrategyForBlended) for the common cases.
+type ReadStrategy = readstrategy.ReadStrategy
+
+var (
+	StrategyForLatency = readstrategy.StrategyForLatency
+	StrategyForMoney   = readstrategy.StrategyForMoney
+	StrategyForBlended = readstrategy.StrategyForBlended
 )
 
 func WithTopicNames(names []string) ReadOption {
-	return func(it *MessageIterator) error {
-		it.topicNames = names
+	return func(it *iter.MessageIterator) error {
+		it.TopicNames = names
 		return nil
 	}
 }
 
 func WithStartTimestamp(timestamp int64) ReadOption {
-	return func(it *MessageIterator) error {
-		it.startTimestamp = timestamp
+	return func(it *iter.MessageIterator) error {
+		it.StartTimestamp = timestamp
 		return nil
 	}
 }
 
 func WithEndTimestamp(timestamp int64) ReadOption {
-	return func(it *MessageIterator) error {
-		it.endTimestamp = timestamp
+	return func(it *iter.MessageIterator) error {
+		it.EndTimestamp = timestamp
 		return nil
 	}
 }
 
 func WithOrder(order Order) ReadOption {
-	return func(it *MessageIterator) error {
-		it.order = order
+	return func(it *iter.MessageIterator) error {
+		it.Order = order
 		return nil
 	}
 }
@@ -41,8 +64,8 @@ func WithOrder(order Order) ReadOption {
 // the given strategy. Without this option, the reader uses the default
 // memory-minimal path (lazy Seek+Read, one chunk at a time).
 func WithReadStrategy(s ReadStrategy) ReadOption {
-	return func(it *MessageIterator) error {
-		it.strategy = &s
+	return func(it *iter.MessageIterator) error {
+		it.Strategy = &s
 		return nil
 	}
 }
@@ -52,8 +75,8 @@ func WithReadStrategy(s ReadStrategy) ReadOption {
 // it costs one ReadAt instead of two reads. Benefits both the default and
 // cost-aware paths. size <= 0 disables the hint (today's exact-sized reads).
 func WithTailPrefetch(size int64) ReadOption {
-	return func(it *MessageIterator) error {
-		it.tailPrefetch = size
+	return func(it *iter.MessageIterator) error {
+		it.TailPrefetch = size
 		return nil
 	}
 }

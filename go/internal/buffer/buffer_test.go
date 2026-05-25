@@ -1,4 +1,4 @@
-package turbodata
+package buffer
 
 import "testing"
 

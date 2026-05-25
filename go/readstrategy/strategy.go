@@ -1,4 +1,9 @@
-package turbodata
+// Package readstrategy defines the strategy struct that drives the cost-aware
+// reader path: how byte ranges are coalesced, when they're split for parallel
+// fetch, and how many fetches may be in flight concurrently. The helper
+// constructors translate common cost models (latency, money, blended) into
+// concrete values.
+package readstrategy
 
 import (
 	"math"

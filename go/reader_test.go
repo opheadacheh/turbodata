@@ -8,13 +8,16 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+
+	"turbodata/format"
+	"turbodata/internal/compress"
 )
 
-func makeReaderFixture(t *testing.T, body []byte, compressedSummary []byte, footer *Footer) ReadSource {
+func makeReaderFixture(t *testing.T, body []byte, compressedSummary []byte, footer *format.Footer) ReadSource {
 	t.Helper()
 
 	if footer == nil {
-		footer = &Footer{
+		footer = &format.Footer{
 			SummaryLen: int64(len(compressedSummary)),
 			Magic:      [5]byte{'7', 'U', 'R', 'B', '0'},
 		}
@@ -27,22 +30,22 @@ func makeReaderFixture(t *testing.T, body []byte, compressedSummary []byte, foot
 	if _, err := buf.Write(compressedSummary); err != nil {
 		t.Fatalf("write compressed summary: %v", err)
 	}
-	if err := WriteFooter(buf, footer); err != nil {
+	if err := format.WriteFooter(buf, footer); err != nil {
 		t.Fatalf("WriteFooter: %v", err)
 	}
 
 	return bytes.NewReader(buf.Bytes())
 }
 
-func makeCompressedSummary(t *testing.T, summary *Summary) []byte {
+func makeCompressedSummary(t *testing.T, summary *format.Summary) []byte {
 	t.Helper()
 
 	summaryBuf := &bytes.Buffer{}
-	if err := WriteSummary(summaryBuf, summary); err != nil {
+	if err := format.WriteSummary(summaryBuf, summary); err != nil {
 		t.Fatalf("WriteSummary: %v", err)
 	}
 
-	compressed, err := compress(summaryBuf.Bytes())
+	compressed, err := compress.Compress(summaryBuf.Bytes())
 	if err != nil {
 		t.Fatalf("compress summary: %v", err)
 	}
@@ -51,7 +54,7 @@ func makeCompressedSummary(t *testing.T, summary *Summary) []byte {
 }
 
 func TestNewReader(t *testing.T) {
-	validSummary := &Summary{TopicsInfos: []*TopicsInfo{}}
+	validSummary := &format.Summary{TopicsInfos: []*format.TopicsInfo{}}
 	validCompressed := makeCompressedSummary(t, validSummary)
 
 	t.Run("valid_footer_and_magic", func(t *testing.T) {
@@ -66,7 +69,7 @@ func TestNewReader(t *testing.T) {
 	})
 
 	t.Run("invalid_magic", func(t *testing.T) {
-		rs := makeReaderFixture(t, nil, validCompressed, &Footer{
+		rs := makeReaderFixture(t, nil, validCompressed, &format.Footer{
 			SummaryLen: int64(len(validCompressed)),
 			Magic:      [5]byte{'B', 'A', 'D', '!', '!'},
 		})
@@ -95,25 +98,25 @@ func TestNewReader(t *testing.T) {
 }
 
 func TestReaderSummary(t *testing.T) {
-	populated := &Summary{
-		TopicsInfos: []*TopicsInfo{
+	populated := &format.Summary{
+		TopicsInfos: []*format.TopicsInfo{
 			{
-				TopicMetadatas: []*TopicMetadata{
+				TopicMetadatas: []*format.TopicMetadata{
 					{Id: 1, Name: "topic/1", Metadata: map[string]any{"encoding": "json"}},
 				},
-				IndexChunkInfoList: []*IndexChunkInfo{
+				IndexChunkInfoList: []*format.IndexChunkInfo{
 					{StartTimestamp: 10, EndTimestamp: 20, Offset: 128},
 				},
 				TotalLen: 512,
 			},
 		},
 	}
-	empty := &Summary{TopicsInfos: []*TopicsInfo{}}
+	empty := &format.Summary{TopicsInfos: []*format.TopicsInfo{}}
 
 	t.Run("roundtrip_populated_and_empty", func(t *testing.T) {
 		for _, tc := range []struct {
 			name    string
-			summary *Summary
+			summary *format.Summary
 		}{
 			{name: "populated", summary: populated},
 			{name: "empty", summary: empty},
@@ -168,7 +171,7 @@ func TestReaderSummary(t *testing.T) {
 
 	t.Run("truncated_compressed_summary", func(t *testing.T) {
 		compressed := makeCompressedSummary(t, populated)
-		rs := makeReaderFixture(t, nil, compressed, &Footer{
+		rs := makeReaderFixture(t, nil, compressed, &format.Footer{
 			SummaryLen: int64(len(compressed) + 1),
 			Magic:      [5]byte{'7', 'U', 'R', 'B', '0'},
 		})
@@ -198,7 +201,7 @@ func TestReaderSummary(t *testing.T) {
 	})
 
 	t.Run("invalid_summary_payload", func(t *testing.T) {
-		compressed, err := compress([]byte{0x01, 0x02})
+		compressed, err := compress.Compress([]byte{0x01, 0x02})
 		if err != nil {
 			t.Fatalf("compress invalid summary payload: %v", err)
 		}
@@ -238,10 +241,10 @@ func (c *countingReadSource) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func TestSummaryWithHint(t *testing.T) {
-	summary := &Summary{
-		TopicsInfos: []*TopicsInfo{
+	summary := &format.Summary{
+		TopicsInfos: []*format.TopicsInfo{
 			{
-				TopicMetadatas: []*TopicMetadata{
+				TopicMetadatas: []*format.TopicMetadata{
 					{Id: 1, Name: "t", Metadata: map[string]any{}},
 				},
 				TotalLen: 8,
@@ -278,7 +281,7 @@ func TestSummaryWithHint(t *testing.T) {
 			t.Fatalf("NewReader: %v", err)
 		}
 
-		hint := int64(len(compressed) + footerLen + 8) // covers footer + summary + slack
+		hint := int64(len(compressed) + format.FooterLen + 8) // covers footer + summary + slack
 		if _, err := reader.summaryWithHint(hint); err != nil {
 			t.Fatalf("summaryWithHint: %v", err)
 		}
@@ -299,7 +302,7 @@ func TestSummaryWithHint(t *testing.T) {
 			t.Fatalf("NewReader: %v", err)
 		}
 
-		if _, err := reader.summaryWithHint(footerLen); err != nil {
+		if _, err := reader.summaryWithHint(format.FooterLen); err != nil {
 			t.Fatalf("summaryWithHint: %v", err)
 		}
 		if c.ReadAtCalls != 2 {

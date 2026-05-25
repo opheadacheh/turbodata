@@ -1,4 +1,4 @@
-package turbodata
+package iorange
 
 import (
 	"bytes"
@@ -51,7 +51,7 @@ func TestFetcherExecuteCorrectness(t *testing.T) {
 // in-flight ReadAt calls observed during the test, so we can verify the
 // fetcher honors MaxConcurrency.
 type concurrencyObserver struct {
-	r       io.ReaderAt
+	r        io.ReaderAt
 	inFlight atomic.Int64
 	maxSeen  atomic.Int64
 }
@@ -71,21 +71,10 @@ func (c *concurrencyObserver) ReadAt(p []byte, off int64) (int, error) {
 	return n, err
 }
 
-// readSeekerAt is the minimal type needed to satisfy ReadSource. Read and
-// Seek are not called by the cost-aware path / Fetcher, so this stub returns
-// errors for them; only ReadAt is exercised.
-type readSeekerAt struct {
-	ra io.ReaderAt
-}
-
-func (r *readSeekerAt) Read(_ []byte) (int, error)              { return 0, io.EOF }
-func (r *readSeekerAt) Seek(_ int64, _ int) (int64, error)      { return 0, io.EOF }
-func (r *readSeekerAt) ReadAt(p []byte, off int64) (int, error) { return r.ra.ReadAt(p, off) }
-
 func TestFetcherRespectsMaxConcurrency(t *testing.T) {
 	data := bytes.Repeat([]byte("x"), 1024)
 	obs := &concurrencyObserver{r: bytes.NewReader(data)}
-	f := NewFetcher(&readSeekerAt{ra: obs}, 3)
+	f := NewFetcher(obs, 3)
 
 	const numOps = 16
 	ops := make([]ReadOp, numOps)
@@ -108,7 +97,7 @@ func TestFetcherRespectsMaxConcurrency(t *testing.T) {
 func TestFetcherSerialWhenConcurrencyClamped(t *testing.T) {
 	data := []byte("hello world")
 	obs := &concurrencyObserver{r: bytes.NewReader(data)}
-	f := NewFetcher(&readSeekerAt{ra: obs}, 0) // clamps to 1
+	f := NewFetcher(obs, 0) // clamps to 1
 
 	ops := []ReadOp{
 		{Offset: 0, Length: 5},
@@ -146,8 +135,7 @@ func (f *failingReaderAt) ReadAt(p []byte, off int64) (int, error) {
 
 func TestFetcherPropagatesError(t *testing.T) {
 	wantErr := io.ErrUnexpectedEOF
-	src := &readSeekerAt{ra: &failingReaderAt{err: wantErr}}
-	f := NewFetcher(src, 1)
+	f := NewFetcher(&failingReaderAt{err: wantErr}, 1)
 	ops := []ReadOp{
 		{Offset: 0, Length: 4},
 		{Offset: 4, Length: 4},

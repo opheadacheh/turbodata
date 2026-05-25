@@ -1,18 +1,10 @@
 package turbodata
 
-type ReusableBuffer struct {
-	Data []byte
-}
+import "turbodata/internal/buffer"
 
-func NewReusableBuffer() *ReusableBuffer {
-	return &ReusableBuffer{Data: make([]byte, 0)}
-}
+// ReusableBuffer is a growable byte buffer designed to be reused across calls
+// to MessageIterator.NextInto, avoiding per-message allocations.
+type ReusableBuffer = buffer.ReusableBuffer
 
-func (b *ReusableBuffer) Prepare(len int) {
-	if cap(b.Data) < len {
-		b.Data = make([]byte, len)
-		return
-	}
-
-	b.Data = b.Data[:len]
-}
+// NewReusableBuffer returns a freshly-allocated buffer with zero length.
+var NewReusableBuffer = buffer.NewReusableBuffer

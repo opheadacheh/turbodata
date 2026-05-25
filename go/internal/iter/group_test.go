@@ -1,13 +1,17 @@
-package turbodata
+package iter_test
 
-import "testing"
+import (
+	"testing"
+
+	"turbodata"
+)
 
 // TestTopicsGroupIterator_IntraGroupTopicFilter verifies the topicIds filter inside
 // sortAndFilterMerge. Unlike TestNextIntoTopicNameFilter (which puts each
 // topic in its own separate group), this test places both topics in the same group
 // so the per-message topic filter is actually exercised.
 func TestTopicsGroupIterator_IntraGroupTopicFilter(t *testing.T) {
-	r := writerRoundTrip(t, func(w *Writer) {
+	r := writerRoundTrip(t, func(w *turbodata.Writer) {
 		mustOpenTopics(t, w, []string{"a", "b"}, []map[string]any{{}, {}})
 		mustWriteMessage(t, w, "a", []byte("a1"), 10)
 		mustWriteMessage(t, w, "b", []byte("b1"), 20)
@@ -17,7 +21,7 @@ func TestTopicsGroupIterator_IntraGroupTopicFilter(t *testing.T) {
 		mustClose(t, w)
 	})
 
-	msgs := collect(t, r, WithTopicNames([]string{"a"}))
+	msgs := collect(t, r, turbodata.WithTopicNames([]string{"a"}))
 	if len(msgs) != 2 {
 		t.Fatalf("expected 2 messages for topic a, got %d", len(msgs))
 	}
@@ -43,7 +47,7 @@ func TestTopicsGroupIterator_IntraGroupTopicFilter(t *testing.T) {
 // per chunk so the chunk-level filter handles everything; here all messages land in a
 // single chunk so the boundary messages must be dropped at the message level.
 func TestTopicsGroupIterator_PerMessageTimestampFilter(t *testing.T) {
-	r := writerRoundTrip(t, func(w *Writer) {
+	r := writerRoundTrip(t, func(w *turbodata.Writer) {
 		mustOpenTopics(t, w, []string{"t"}, []map[string]any{{}})
 		mustWriteMessage(t, w, "t", []byte("m5"), 5)
 		mustWriteMessage(t, w, "t", []byte("m10"), 10)
@@ -53,7 +57,7 @@ func TestTopicsGroupIterator_PerMessageTimestampFilter(t *testing.T) {
 		mustClose(t, w)
 	})
 
-	msgs := collect(t, r, WithStartTimestamp(10), WithEndTimestamp(20))
+	msgs := collect(t, r, turbodata.WithStartTimestamp(10), turbodata.WithEndTimestamp(20))
 	if len(msgs) != 2 {
 		t.Fatalf("expected 2 messages (ts=10,20), got %d", len(msgs))
 	}
@@ -70,9 +74,9 @@ func TestTopicsGroupIterator_PerMessageTimestampFilter(t *testing.T) {
 // No existing test creates this scenario (prior tests either have 1 msg per chunk or
 // use range filters that the chunk-level filter in newTopicsGroupIterator already handles).
 func TestTopicsGroupIterator_EmptyChunkAfterFilter(t *testing.T) {
-	chunkCfg := &ChunkConfig{Mode: ChunkThresholdModeCount, Count: 2}
-	r := writerRoundTrip(t, func(w *Writer) {
-		mustOpenTopics(t, w, []string{"t"}, []map[string]any{{}}, WithChunkConfig(chunkCfg))
+	chunkCfg := &turbodata.ChunkConfig{Mode: turbodata.ChunkThresholdModeCount, Count: 2}
+	r := writerRoundTrip(t, func(w *turbodata.Writer) {
+		mustOpenTopics(t, w, []string{"t"}, []map[string]any{{}}, turbodata.WithChunkConfig(chunkCfg))
 		mustWriteMessage(t, w, "t", []byte("m1"), 1)
 		mustWriteMessage(t, w, "t", []byte("m2"), 2)
 		mustWriteMessage(t, w, "t", []byte("m100"), 100)
@@ -81,7 +85,7 @@ func TestTopicsGroupIterator_EmptyChunkAfterFilter(t *testing.T) {
 		mustClose(t, w)
 	})
 
-	msgs := collect(t, r, WithStartTimestamp(100))
+	msgs := collect(t, r, turbodata.WithStartTimestamp(100))
 	if len(msgs) != 2 {
 		t.Fatalf("expected 2 messages (ts=100,200), got %d", len(msgs))
 	}
@@ -97,8 +101,8 @@ func TestTopicsGroupIterator_EmptyChunkAfterFilter(t *testing.T) {
 // WithCompression() sets is_compressed=true in the topic metadata, causing loadDataChunk
 // to decompress the data chunk before reading messages from it.
 func TestTopicsGroupIterator_CompressedData(t *testing.T) {
-	r := writerRoundTrip(t, func(w *Writer) {
-		mustOpenTopics(t, w, []string{"t"}, []map[string]any{{}}, WithCompression())
+	r := writerRoundTrip(t, func(w *turbodata.Writer) {
+		mustOpenTopics(t, w, []string{"t"}, []map[string]any{{}}, turbodata.WithCompression())
 		mustWriteMessage(t, w, "t", []byte("hello"), 10)
 		mustWriteMessage(t, w, "t", []byte("world"), 20)
 		mustWriteMessage(t, w, "t", []byte("compressed"), 30)

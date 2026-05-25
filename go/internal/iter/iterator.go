@@ -1,4 +1,4 @@
-package turbodata
+package iter
 
 import (
 	"bytes"
@@ -6,46 +6,57 @@ import (
 	"context"
 	"io"
 	"math"
+
+	"turbodata/format"
+	"turbodata/internal/buffer"
+	"turbodata/internal/compress"
+	"turbodata/internal/iorange"
+	"turbodata/readstrategy"
 )
 
+// MessageIterator drives reads across all in-scope topic groups, merging them
+// into a single timestamp-ordered stream. The exported fields are configuration
+// the caller (root package) sets before invoking Prepare; everything else is
+// runtime state.
 type MessageIterator struct {
 	rs ReadSource
 
 	heap   heap.Interface
 	loaded bool
 
-	topicNames     []string
-	startTimestamp int64
-	endTimestamp   int64
-	order          Order
-	summary        *Summary
+	// Configuration set by the caller before Prepare().
+	TopicNames     []string
+	StartTimestamp int64
+	EndTimestamp   int64
+	Order          Order
+	Summary        *format.Summary
+	Strategy       *readstrategy.ReadStrategy // nil = default lazy path
+	TailPrefetch   int64
 
-	// Default-path state.
+	// Default-path runtime state.
 	topicsGroupIterators []*TopicsGroupIterator
 	topicIdToNames       map[uint16]string
 
-	// Set via ReadOptions.
-	strategy     *ReadStrategy // nil = default lazy path
-	tailPrefetch int64
-
-	// Cost-aware path state (only populated when strategy != nil).
+	// Cost-aware runtime state.
 	preloadedTopicsGroups []*preloadedTopicsGroupIterator
 }
 
-func newMessageIterator(rs ReadSource, summary *Summary) *MessageIterator {
+// NewMessageIterator returns an iterator with default configuration. The caller
+// is expected to set fields (e.g. TopicNames, Order) and Summary before calling
+// Prepare.
+func NewMessageIterator(rs ReadSource) *MessageIterator {
 	return &MessageIterator{
 		rs:             rs,
-		summary:        summary,
-		order:          TimeOrder,
-		startTimestamp: 0,
-		endTimestamp:   math.MaxInt64,
-		topicNames:     []string{},
+		Order:          TimeOrder,
+		StartTimestamp: 0,
+		EndTimestamp:   math.MaxInt64,
+		TopicNames:     []string{},
 		topicIdToNames: make(map[uint16]string),
 	}
 }
 
-func (it *MessageIterator) prepare() error {
-	switch it.order {
+func (it *MessageIterator) Prepare() error {
+	switch it.Order {
 	case TimeOrder:
 		it.heap = &MessageHeap{}
 	case ReverseTimeOrder:
@@ -55,12 +66,12 @@ func (it *MessageIterator) prepare() error {
 
 	// Build the set of topic names the caller wants to read, defaulting to all.
 	topicNamesMap := make(map[string]struct{})
-	if len(it.topicNames) > 0 {
-		for _, topicName := range it.topicNames {
+	if len(it.TopicNames) > 0 {
+		for _, topicName := range it.TopicNames {
 			topicNamesMap[topicName] = struct{}{}
 		}
 	} else {
-		for _, topicsInfo := range it.summary.TopicsInfos {
+		for _, topicsInfo := range it.Summary.TopicsInfos {
 			for _, topicMetadata := range topicsInfo.TopicMetadatas {
 				topicNamesMap[topicMetadata.Name] = struct{}{}
 			}
@@ -69,7 +80,7 @@ func (it *MessageIterator) prepare() error {
 
 	// Translate names to ids; remember the id -> name mapping for NextInto.
 	topicIds := make(map[uint16]struct{})
-	for _, topicsInfo := range it.summary.TopicsInfos {
+	for _, topicsInfo := range it.Summary.TopicsInfos {
 		for _, topicMetadata := range topicsInfo.TopicMetadatas {
 			if _, ok := topicNamesMap[topicMetadata.Name]; !ok {
 				continue
@@ -79,11 +90,11 @@ func (it *MessageIterator) prepare() error {
 		}
 	}
 
-	if it.strategy != nil {
+	if it.Strategy != nil {
 		return it.prepareCostAware(topicIds, topicNamesMap)
 	}
 
-	for _, topicsInfo := range it.summary.TopicsInfos {
+	for _, topicsInfo := range it.Summary.TopicsInfos {
 		for _, topicMetadata := range topicsInfo.TopicMetadatas {
 			if _, ok := topicNamesMap[topicMetadata.Name]; !ok {
 				continue
@@ -107,18 +118,18 @@ func (it *MessageIterator) prepare() error {
 // build a preloadedTopicsGroupIterator per group.
 func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicNamesMap map[string]struct{}) error {
 	ctx := context.Background()
-	strategy := *it.strategy
-	fetcher := NewFetcher(it.rs, strategy.MaxConcurrency)
+	strategy := *it.Strategy
+	fetcher := iorange.NewFetcher(it.rs, strategy.MaxConcurrency)
 
 	// ---- Determine the in-scope groups and per-group filtered index chunks.
 	type scopedGroup struct {
-		topicsInfo     *TopicsInfo
+		topicsInfo     *format.TopicsInfo
 		isCompressed   bool
-		filteredInfos  []*IndexChunkInfo // chunks within [startTs, endTs]
-		filteredInfoLs []int64           // byte lengths of those index chunks
+		filteredInfos  []*format.IndexChunkInfo // chunks within [startTs, endTs]
+		filteredInfoLs []int64                  // byte lengths of those index chunks
 	}
 	scoped := make([]*scopedGroup, 0)
-	for _, topicsInfo := range it.summary.TopicsInfos {
+	for _, topicsInfo := range it.Summary.TopicsInfos {
 		// Skip groups that don't have any topic the caller cares about.
 		anyMatch := false
 		for _, tm := range topicsInfo.TopicMetadatas {
@@ -134,13 +145,13 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 		isCompressed, _ := topicsInfo.TopicMetadatas[0].Metadata["is_compressed"].(bool)
 
 		// Time-range filter at the chunk level (same logic newTopicsGroupIterator uses).
-		filteredInfos := make([]*IndexChunkInfo, 0, len(topicsInfo.IndexChunkInfoList))
+		filteredInfos := make([]*format.IndexChunkInfo, 0, len(topicsInfo.IndexChunkInfoList))
 		filteredLens := make([]int64, 0, len(topicsInfo.IndexChunkInfoList))
 		for i, info := range topicsInfo.IndexChunkInfoList {
-			if info.EndTimestamp < it.startTimestamp {
+			if info.EndTimestamp < it.StartTimestamp {
 				continue
 			}
-			if info.StartTimestamp > it.endTimestamp {
+			if info.StartTimestamp > it.EndTimestamp {
 				break
 			}
 			filteredInfos = append(filteredInfos, info)
@@ -170,7 +181,7 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 	}
 
 	// ---- Phase A: plan + fetch all index chunk ranges across all groups.
-	var rangesA []Range
+	var rangesA []iorange.Range
 	type rangeAssign struct {
 		groupIdx int
 		chunkIdx int
@@ -178,25 +189,25 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 	rangeMetaA := make([]rangeAssign, 0)
 	for gi, g := range scoped {
 		for ci, info := range g.filteredInfos {
-			rangesA = append(rangesA, Range{Offset: info.Offset, Length: g.filteredInfoLs[ci]})
+			rangesA = append(rangesA, iorange.Range{Offset: info.Offset, Length: g.filteredInfoLs[ci]})
 			rangeMetaA = append(rangeMetaA, rangeAssign{groupIdx: gi, chunkIdx: ci})
 		}
 	}
 	// rangesA is offset-sorted by construction: the writer lays out groups
 	// in summary order and each group's index chunks in append order, both
 	// at monotonically increasing file offsets. Plan requires this.
-	opsA, locA := Plan(rangesA, strategy)
+	opsA, locA := iorange.Plan(rangesA, strategy.CoalesceGap, strategy.SplitThreshold)
 	bufsA, err := fetcher.Execute(ctx, opsA)
 	if err != nil {
 		return err
 	}
-	loadedIndex := NewLoadedBytes(rangesA, locA, bufsA)
+	loadedIndex := iorange.NewLoadedBytes(rangesA, locA, bufsA)
 
 	// ---- Decode each index chunk; run sortAndFilterMerge to learn kept messages.
 	type decodedChunk struct {
-		indexChunk    *IndexChunk
-		messages      []*messageIndexWithTopicId
-		messageLens   []int64
+		indexChunk  *format.IndexChunk
+		messages    []*messageIndexWithTopicId
+		messageLens []int64
 	}
 	perGroupChunks := make([][]decodedChunk, len(scoped))
 	// Reused across all index chunks: ReadIndexChunk + sortAndFilterMerge copy
@@ -204,16 +215,16 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 	// the buffer), so a single scratch buffer suffices. The merge scratch is
 	// also shared across chunks; output slices are allocated fresh per chunk
 	// because they're retained for the iterator's lifetime.
-	indexDecompressBuf := NewReusableBuffer()
+	indexDecompressBuf := buffer.NewReusableBuffer()
 	mergeScratch := newSortAndFilterMergeScratch()
 	for gi, g := range scoped {
 		perGroupChunks[gi] = make([]decodedChunk, len(g.filteredInfos))
 		for ci, info := range g.filteredInfos {
 			raw := loadedIndex.Get(info.Offset)
-			if err := decompressInto(raw, indexDecompressBuf); err != nil {
+			if err := compress.DecompressInto(raw, indexDecompressBuf); err != nil {
 				return err
 			}
-			ic, err := ReadIndexChunk(bytes.NewReader(indexDecompressBuf.Data))
+			ic, err := format.ReadIndexChunk(bytes.NewReader(indexDecompressBuf.Data))
 			if err != nil {
 				return err
 			}
@@ -223,8 +234,8 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 				ic.TopicIndexes,
 				ic.UncompressedLen,
 				topicIds,
-				it.startTimestamp,
-				it.endTimestamp,
+				it.StartTimestamp,
+				it.EndTimestamp,
 				mergeScratch,
 				&msgs,
 				&lens,
@@ -238,14 +249,14 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 	// own Range; Plan coalesces contiguous (and near-contiguous, per
 	// strategy.CoalesceGap) messages into single ReadOps, and NewLoadedBytes
 	// indexes each message offset individually for direct lookup.
-	var rangesB []Range
+	var rangesB []iorange.Range
 	for gi, g := range scoped {
 		if g.isCompressed {
 			for _, dc := range perGroupChunks[gi] {
 				if len(dc.messages) == 0 {
 					continue
 				}
-				rangesB = append(rangesB, Range{
+				rangesB = append(rangesB, iorange.Range{
 					Offset: dc.indexChunk.ChunkOffset,
 					Length: dc.indexChunk.ChunkLen,
 				})
@@ -254,7 +265,7 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 		}
 		for _, dc := range perGroupChunks[gi] {
 			for k, msg := range dc.messages {
-				rangesB = append(rangesB, Range{
+				rangesB = append(rangesB, iorange.Range{
 					Offset: dc.indexChunk.ChunkOffset + msg.messageIndex.OffsetInChunk,
 					Length: dc.messageLens[k],
 				})
@@ -264,17 +275,17 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 	// rangesB is offset-sorted by construction: data chunks (and messages
 	// within them) are appended in writer order, which is increasing file
 	// offset. Plan requires this.
-	opsB, locB := Plan(rangesB, strategy)
+	opsB, locB := iorange.Plan(rangesB, strategy.CoalesceGap, strategy.SplitThreshold)
 	bufsB, err := fetcher.Execute(ctx, opsB)
 	if err != nil {
 		return err
 	}
-	loadedData := NewLoadedBytes(rangesB, locB, bufsB)
+	loadedData := iorange.NewLoadedBytes(rangesB, locB, bufsB)
 
 	// ---- Build a preloadedTopicsGroupIterator per scoped group.
 	it.preloadedTopicsGroups = make([]*preloadedTopicsGroupIterator, 0, len(scoped))
 	for gi, g := range scoped {
-		indexChunks := make([]*IndexChunk, 0, len(perGroupChunks[gi]))
+		indexChunks := make([]*format.IndexChunk, 0, len(perGroupChunks[gi]))
 		chunkMsgs := make([][]*messageIndexWithTopicId, 0, len(perGroupChunks[gi]))
 		chunkLens := make([][]int64, 0, len(perGroupChunks[gi]))
 		for _, dc := range perGroupChunks[gi] {
@@ -288,13 +299,13 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 		if len(indexChunks) == 0 {
 			continue
 		}
-		groupIt := newPreloadedTopicsGroupIterator(g.isCompressed, it.order, indexChunks, chunkMsgs, chunkLens, loadedData)
+		groupIt := newPreloadedTopicsGroupIterator(g.isCompressed, it.Order, indexChunks, chunkMsgs, chunkLens, loadedData)
 		it.preloadedTopicsGroups = append(it.preloadedTopicsGroups, groupIt)
 	}
 	return nil
 }
 
-func (it *MessageIterator) NextInto(buf *ReusableBuffer) (int64, string, error) {
+func (it *MessageIterator) NextInto(buf *buffer.ReusableBuffer) (int64, string, error) {
 	if !it.loaded {
 		if err := it.initLoad(); err != nil {
 			return 0, "", err
@@ -328,7 +339,7 @@ func (it *MessageIterator) NextInto(buf *ReusableBuffer) (int64, string, error) 
 }
 
 func (it *MessageIterator) groupNext(groupIndex int) (int64, uint16, []byte, error) {
-	if it.strategy != nil {
+	if it.Strategy != nil {
 		return it.preloadedTopicsGroups[groupIndex].Next()
 	}
 	return it.topicsGroupIterators[groupIndex].Next()
@@ -336,7 +347,7 @@ func (it *MessageIterator) groupNext(groupIndex int) (int64, uint16, []byte, err
 
 func (it *MessageIterator) initLoad() error {
 	groupCount := len(it.topicsGroupIterators)
-	if it.strategy != nil {
+	if it.Strategy != nil {
 		groupCount = len(it.preloadedTopicsGroups)
 	}
 	for i := 0; i < groupCount; i++ {

@@ -1,8 +1,10 @@
-package turbodata
+package iter
+
+import "turbodata/format"
 
 type messageIndexWithTopicId struct {
 	topicId      uint16
-	messageIndex *MessageIndex
+	messageIndex *format.MessageIndex
 }
 
 // Time ordered message index heap.

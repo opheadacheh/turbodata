@@ -1,13 +1,15 @@
-package turbodata
+package iter_test
 
 import (
 	"errors"
 	"io"
 	"testing"
+
+	"turbodata"
 )
 
 func TestNextIntoEmpty(t *testing.T) {
-	r := writerRoundTrip(t, func(w *Writer) {
+	r := writerRoundTrip(t, func(w *turbodata.Writer) {
 		mustClose(t, w)
 	})
 
@@ -15,7 +17,7 @@ func TestNextIntoEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadMessages: %v", err)
 	}
-	rb := NewReusableBuffer()
+	rb := turbodata.NewReusableBuffer()
 	_, _, err = it.NextInto(rb)
 	if !errors.Is(err, io.EOF) {
 		t.Errorf("expected io.EOF for empty file, got %v", err)
@@ -23,7 +25,7 @@ func TestNextIntoEmpty(t *testing.T) {
 }
 
 func TestNextIntoSingleTopicOrder(t *testing.T) {
-	r := writerRoundTrip(t, func(w *Writer) {
+	r := writerRoundTrip(t, func(w *turbodata.Writer) {
 		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}})
 		mustWriteMessage(t, w, "cam", []byte("frame0"), 10)
 		mustWriteMessage(t, w, "cam", []byte("frame1"), 20)
@@ -58,7 +60,7 @@ func TestNextIntoMultiTopicMerge(t *testing.T) {
 	// Two topics in the same group; messages interleaved by timestamp.
 	// The writer enforces non-decreasing timestamps across all topics in a group,
 	// so messages are written in global timestamp order.
-	r := writerRoundTrip(t, func(w *Writer) {
+	r := writerRoundTrip(t, func(w *turbodata.Writer) {
 		mustOpenTopics(t, w, []string{"a", "b"}, []map[string]any{{}, {}})
 		mustWriteMessage(t, w, "a", []byte("a1"), 10)
 		mustWriteMessage(t, w, "b", []byte("b1"), 20)
@@ -94,7 +96,7 @@ func TestNextIntoMultiTopicMerge(t *testing.T) {
 func TestNextIntoReverseOrder(t *testing.T) {
 	// Two topics in the same group, same setup as TestNextIntoMultiTopicMerge.
 	// WithOrder(ReverseTimeOrder) should deliver messages in descending timestamp order.
-	r := writerRoundTrip(t, func(w *Writer) {
+	r := writerRoundTrip(t, func(w *turbodata.Writer) {
 		mustOpenTopics(t, w, []string{"a", "b"}, []map[string]any{{}, {}})
 		mustWriteMessage(t, w, "a", []byte("a1"), 10)
 		mustWriteMessage(t, w, "b", []byte("b1"), 20)
@@ -104,7 +106,7 @@ func TestNextIntoReverseOrder(t *testing.T) {
 		mustClose(t, w)
 	})
 
-	msgs := collect(t, r, WithOrder(ReverseTimeOrder))
+	msgs := collect(t, r, turbodata.WithOrder(turbodata.ReverseTimeOrder))
 	if len(msgs) != 4 {
 		t.Fatalf("expected 4 messages, got %d", len(msgs))
 	}
@@ -119,7 +121,7 @@ func TestNextIntoReverseOrder(t *testing.T) {
 func TestNextIntoTopicNameFilter(t *testing.T) {
 	// Two separate groups (separate OpenTopics calls), each with one topic.
 	// Using separate groups avoids per-message topic filtering within a shared chunk.
-	r := writerRoundTrip(t, func(w *Writer) {
+	r := writerRoundTrip(t, func(w *turbodata.Writer) {
 		mustOpenTopics(t, w, []string{"topic_a"}, []map[string]any{{}})
 		mustWriteMessage(t, w, "topic_a", []byte("a1"), 10)
 		mustWriteMessage(t, w, "topic_a", []byte("a2"), 20)
@@ -131,7 +133,7 @@ func TestNextIntoTopicNameFilter(t *testing.T) {
 		mustClose(t, w)
 	})
 
-	msgs := collect(t, r, WithTopicNames([]string{"topic_a"}))
+	msgs := collect(t, r, turbodata.WithTopicNames([]string{"topic_a"}))
 	if len(msgs) != 2 {
 		t.Fatalf("expected 2 messages for topic_a, got %d", len(msgs))
 	}
@@ -145,9 +147,9 @@ func TestNextIntoTopicNameFilter(t *testing.T) {
 func TestNextIntoTimestampRange(t *testing.T) {
 	// One message per chunk (Count=1) so the chunk-level filter skips ts=10 and
 	// ts=50 entirely, and the three remaining chunks are each read individually.
-	chunkCfg := &ChunkConfig{Mode: ChunkThresholdModeCount, Count: 1}
-	r := writerRoundTrip(t, func(w *Writer) {
-		mustOpenTopics(t, w, []string{"t"}, []map[string]any{{}}, WithChunkConfig(chunkCfg))
+	chunkCfg := &turbodata.ChunkConfig{Mode: turbodata.ChunkThresholdModeCount, Count: 1}
+	r := writerRoundTrip(t, func(w *turbodata.Writer) {
+		mustOpenTopics(t, w, []string{"t"}, []map[string]any{{}}, turbodata.WithChunkConfig(chunkCfg))
 		mustWriteMessage(t, w, "t", []byte("m10"), 10)
 		mustWriteMessage(t, w, "t", []byte("m20"), 20)
 		mustWriteMessage(t, w, "t", []byte("m30"), 30)
@@ -157,7 +159,7 @@ func TestNextIntoTimestampRange(t *testing.T) {
 		mustClose(t, w)
 	})
 
-	msgs := collect(t, r, WithStartTimestamp(20), WithEndTimestamp(40))
+	msgs := collect(t, r, turbodata.WithStartTimestamp(20), turbodata.WithEndTimestamp(40))
 	if len(msgs) != 3 {
 		t.Fatalf("expected 3 messages (ts=20,30,40), got %d", len(msgs))
 	}
@@ -171,9 +173,9 @@ func TestNextIntoTimestampRange(t *testing.T) {
 
 func TestNextIntoMultipleChunks(t *testing.T) {
 	// Force a new chunk per message; verify all 5 messages are recovered in order.
-	chunkCfg := &ChunkConfig{Mode: ChunkThresholdModeCount, Count: 1}
-	r := writerRoundTrip(t, func(w *Writer) {
-		mustOpenTopics(t, w, []string{"t"}, []map[string]any{{}}, WithChunkConfig(chunkCfg))
+	chunkCfg := &turbodata.ChunkConfig{Mode: turbodata.ChunkThresholdModeCount, Count: 1}
+	r := writerRoundTrip(t, func(w *turbodata.Writer) {
+		mustOpenTopics(t, w, []string{"t"}, []map[string]any{{}}, turbodata.WithChunkConfig(chunkCfg))
 		for i := int64(0); i < 5; i++ {
 			mustWriteMessage(t, w, "t", []byte{byte(i)}, i*10)
 		}
@@ -198,7 +200,7 @@ func TestNextIntoMultipleChunks(t *testing.T) {
 func TestNextIntoMultiGroupMerge(t *testing.T) {
 	// Two separate topic groups with interleaved timestamps.
 	// Verifies that MessageIterator's top-level heap merges across groups.
-	r := writerRoundTrip(t, func(w *Writer) {
+	r := writerRoundTrip(t, func(w *turbodata.Writer) {
 		mustOpenTopics(t, w, []string{"x"}, []map[string]any{{}})
 		mustWriteMessage(t, w, "x", []byte("x10"), 10)
 		mustWriteMessage(t, w, "x", []byte("x30"), 30)

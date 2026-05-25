@@ -1,6 +1,6 @@
-package turbodata
+package iter
 
-import "turbodata/internal/iter"
+import "io"
 
 // ReadSource is the combined I/O capability the Reader expects from its
 // underlying storage. It is satisfied natively by *os.File and *bytes.Reader.
@@ -10,4 +10,7 @@ import "turbodata/internal/iter"
 // from multiple goroutines simultaneously. Read and Seek may be stateful;
 // the cost-aware path does not call them. The default (non-cost-aware)
 // path calls Read and Seek serially.
-type ReadSource = iter.ReadSource
+type ReadSource interface {
+	io.ReadSeeker
+	io.ReaderAt
+}
