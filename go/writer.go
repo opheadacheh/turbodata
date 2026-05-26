@@ -251,8 +251,11 @@ func (w *Writer) WriteVideoMessage(topicName string, message []byte, timestamp i
 	}
 
 	// Keyframe-gated chunk boundary: only flush at a key frame, only when the
-	// threshold is met. This is what guarantees GOP integrity.
-	if isKeyFrame && w.buf.Len() > 0 && w.thresholdReached(timestamp) {
+	// threshold is met by the messages CURRENTLY in the chunk (which end at
+	// w.lastTimestamp; the incoming keyframe isn't in the chunk yet and will
+	// either join the current chunk or start the next one depending on the
+	// flush decision). This is what guarantees GOP integrity.
+	if isKeyFrame && w.buf.Len() > 0 && w.thresholdReached(w.lastTimestamp) {
 		if err := w.writeChunk(); err != nil {
 			return err
 		}
@@ -306,10 +309,15 @@ func (w *Writer) topicHasAnyMessage(id uint16) bool {
 	return false
 }
 
-// thresholdReached returns whether the currently configured chunk threshold
-// has been met by the in-progress chunk. Mirrors the inline conditions in
-// WriteMessage, factored out so WriteVideoMessage can defer the actual flush.
-func (w *Writer) thresholdReached(currentTimestamp int64) bool {
+// thresholdReached returns whether the in-progress chunk has reached the
+// configured threshold. lastChunkTimestamp is the timestamp of the latest
+// message currently buffered in the chunk (i.e. w.lastTimestamp at the
+// caller's point of view), used only by ChunkThresholdModeDuration.
+//
+// Factored out so WriteVideoMessage can defer the actual flush to a key
+// frame boundary while still using the same threshold semantics as
+// WriteMessage's inline checks.
+func (w *Writer) thresholdReached(lastChunkTimestamp int64) bool {
 	cfg := w.writerConfig.chunkConfig
 	switch cfg.Mode {
 	case ChunkThresholdModeSize:
@@ -318,7 +326,7 @@ func (w *Writer) thresholdReached(currentTimestamp int64) bool {
 		if w.chunkStatus.startTimestamp == -1 {
 			return false
 		}
-		return currentTimestamp-w.chunkStatus.startTimestamp >= cfg.Duration
+		return lastChunkTimestamp-w.chunkStatus.startTimestamp >= cfg.Duration
 	case ChunkThresholdModeCount:
 		return w.chunkStatus.count >= cfg.Count
 	}

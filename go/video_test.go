@@ -198,6 +198,44 @@ func TestVideoGOPIntegrityChunkBoundary(t *testing.T) {
 	}
 }
 
+// Duration-mode flush decision must measure the chunk's actual current
+// contents (ends at lastTimestamp), not "what the chunk would be if it
+// included the incoming keyframe". This guards against the off-by-one where
+// the incoming keyframe's timestamp would push the test over threshold even
+// though the keyframe is about to start the next chunk anyway.
+//
+// Setup: Duration=100. GOP A spans ts=0..50 (well below 100). The next
+// keyframe arrives at ts=110. With lastTimestamp-based semantics:
+//   - thresholdReached uses lastTimestamp=50; 50-0=50 < 100 -> no flush.
+//   - Keyframe joins the current chunk; still one chunk so far.
+// With (incorrect) timestamp-based semantics:
+//   - thresholdReached would use 110; 110-0=110 >= 100 -> flush early.
+//   - Chunk would split even though the current chunk only spans 50.
+func TestVideoDurationThresholdUsesLastTimestamp(t *testing.T) {
+	cfg := &ChunkConfig{Mode: ChunkThresholdModeDuration, Duration: 100}
+	frames := []frame{
+		{ts: 0, isKeyFrame: true, data: []byte("KA")},
+		{ts: 50, isKeyFrame: false, data: []byte("A1")},
+		// Incoming keyframe at ts=110: chunk-so-far span = 50-0 = 50 < 100,
+		// so we must NOT flush before it. Keyframe joins the same chunk.
+		{ts: 110, isKeyFrame: true, data: []byte("KB")},
+	}
+	r := writerRoundTrip(t, func(w *Writer) {
+		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}},
+			WithChunkConfig(cfg), WithVideoTopic())
+		writeVideo(t, w, "cam", frames)
+		mustCloseTopic(t, w)
+		mustClose(t, w)
+	})
+	summary, err := r.Summary()
+	if err != nil {
+		t.Fatalf("Summary: %v", err)
+	}
+	if got := len(summary.TopicsInfos[0].IndexChunkInfoList); got != 1 {
+		t.Errorf("expected 1 chunk (KB's ts doesn't count toward the current chunk's span); got %d", got)
+	}
+}
+
 // Threshold met inside a GOP should not flush mid-GOP. With size threshold of
 // 1 byte and a 5-frame GOP [K P P P P], the threshold is met after every
 // frame but we must wait for the next K (or CloseTopic) to flush.
