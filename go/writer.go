@@ -18,11 +18,11 @@ type WriterConfig struct {
 	chunkConfig  *ChunkConfig
 	isCompressed bool
 
-	// Video-topic state. isVideo is true when this group was opened with
-	// WithVideoTopic. When isVideo is true, len(topicIds) == 1 and codec
-	// names the bitstream's codec ("h264", "h265", "vp9", "av1").
+	// isVideo is true when this group was opened with WithVideoTopic. The
+	// codec string itself lives in the per-topic metadata map (serialized
+	// into the file) and is consumed by readers / decoders; the writer's
+	// runtime behavior only branches on isVideo.
 	isVideo bool
-	codec   string
 }
 
 type Writer struct {
@@ -150,15 +150,12 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 		isCompressed = false
 	}
 
-	codec, _ := metadatas[0]["codec"].(string)
-
 	w.writerConfig = &WriterConfig{
 		namesToIds:   namesToIds,
 		topicIds:     topicIds,
 		chunkConfig:  chunkConfig,
 		isCompressed: isCompressed,
 		isVideo:      anyVideo,
-		codec:        codec,
 	}
 
 	w.chunkStatus = &ChunkStatus{

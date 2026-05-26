@@ -50,14 +50,24 @@ func TestWithVideoTopicOption(t *testing.T) {
 
 	t.Run("h264_accepted", func(t *testing.T) {
 		w := NewWriter(&bytes.Buffer{})
-		if err := w.OpenTopics([]string{"cam"}, []map[string]any{{}}, WithVideoTopic("h264")); err != nil {
+		metadata := map[string]any{}
+		if err := w.OpenTopics([]string{"cam"}, []map[string]any{metadata}, WithVideoTopic("h264")); err != nil {
 			t.Fatalf("OpenTopics(WithVideoTopic h264): %v", err)
 		}
 		if !w.writerConfig.isVideo {
 			t.Error("expected isVideo=true")
 		}
-		if w.writerConfig.codec != "h264" {
-			t.Errorf("expected codec=h264, got %q", w.writerConfig.codec)
+		// The codec string is consumer-facing metadata: it flows into the
+		// per-topic map and is serialized to the file, not into the writer's
+		// runtime state. Verify it's recorded where readers will find it.
+		if got := metadata["codec"]; got != "h264" {
+			t.Errorf("metadata[codec] = %v, want h264", got)
+		}
+		if got := metadata["is_video"]; got != true {
+			t.Errorf("metadata[is_video] = %v, want true", got)
+		}
+		if got := metadata["has_b_frames"]; got != false {
+			t.Errorf("metadata[has_b_frames] = %v, want false", got)
 		}
 	})
 
