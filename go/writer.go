@@ -18,10 +18,9 @@ type WriterConfig struct {
 	chunkConfig  *ChunkConfig
 	isCompressed bool
 
-	// isVideo is true when this group was opened with WithVideoTopic. The
-	// codec string itself lives in the per-topic metadata map (serialized
-	// into the file) and is consumed by readers / decoders; the writer's
-	// runtime behavior only branches on isVideo.
+	// isVideo is true when this group was opened with WithVideoTopic.
+	// Gates one-topic-per-group, keyframe-aware chunking, and the
+	// WriteMessage / WriteVideoMessage routing checks.
 	isVideo bool
 }
 

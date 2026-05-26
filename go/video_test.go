@@ -40,34 +40,19 @@ func writeVideo(t *testing.T, w *Writer, topic string, frames []frame) {
 // ---- WithVideoTopic option validation ------------------------------------
 
 func TestWithVideoTopicOption(t *testing.T) {
-	t.Run("unknown_codec_rejected", func(t *testing.T) {
-		w := NewWriter(&bytes.Buffer{})
-		err := w.OpenTopics([]string{"cam"}, []map[string]any{{}}, WithVideoTopic("vp10"))
-		if !errors.Is(err, ErrUnknownVideoCodec) {
-			t.Errorf("expected ErrUnknownVideoCodec, got %v", err)
-		}
-	})
-
-	t.Run("h264_accepted", func(t *testing.T) {
+	t.Run("sets_is_video_metadata", func(t *testing.T) {
 		w := NewWriter(&bytes.Buffer{})
 		metadata := map[string]any{}
-		if err := w.OpenTopics([]string{"cam"}, []map[string]any{metadata}, WithVideoTopic("h264")); err != nil {
-			t.Fatalf("OpenTopics(WithVideoTopic h264): %v", err)
+		if err := w.OpenTopics([]string{"cam"}, []map[string]any{metadata}, WithVideoTopic()); err != nil {
+			t.Fatalf("OpenTopics(WithVideoTopic): %v", err)
 		}
 		if !w.writerConfig.isVideo {
 			t.Error("expected isVideo=true")
 		}
-		// The codec string is consumer-facing metadata: it flows into the
-		// per-topic map and is serialized to the file, not into the writer's
-		// runtime state. Verify it's recorded where readers will find it.
-		if got := metadata["codec"]; got != "h264" {
-			t.Errorf("metadata[codec] = %v, want h264", got)
-		}
+		// is_video is what readers look at to decide whether to apply the
+		// video-aware sampling and snap-back behaviour.
 		if got := metadata["is_video"]; got != true {
 			t.Errorf("metadata[is_video] = %v, want true", got)
-		}
-		if got := metadata["has_b_frames"]; got != false {
-			t.Errorf("metadata[has_b_frames] = %v, want false", got)
 		}
 	})
 
@@ -77,7 +62,7 @@ func TestWithVideoTopicOption(t *testing.T) {
 		// then WithVideoTopic rejects because the metadata already says
 		// compressed.
 		err := w.OpenTopics([]string{"cam"}, []map[string]any{{}},
-			WithCompression(), WithVideoTopic("h264"))
+			WithCompression(), WithVideoTopic())
 		if !errors.Is(err, ErrVideoTopicCannotBeCompressed) {
 			t.Errorf("expected ErrVideoTopicCannotBeCompressed, got %v", err)
 		}
@@ -88,7 +73,7 @@ func TestWithVideoTopicOption(t *testing.T) {
 		// later flips is_compressed. OpenTopics's own check catches this.
 		w := NewWriter(&bytes.Buffer{})
 		err := w.OpenTopics([]string{"cam"}, []map[string]any{{}},
-			WithVideoTopic("h264"), WithCompression())
+			WithVideoTopic(), WithCompression())
 		if !errors.Is(err, ErrVideoTopicCannotBeCompressed) {
 			t.Errorf("expected ErrVideoTopicCannotBeCompressed, got %v", err)
 		}
@@ -102,7 +87,7 @@ func TestVideoGroupMustBeSingleTopic(t *testing.T) {
 	err := w.OpenTopics(
 		[]string{"cam", "stereo"},
 		[]map[string]any{{}, {}},
-		WithVideoTopic("h264"),
+		WithVideoTopic(),
 	)
 	if !errors.Is(err, ErrVideoGroupMustBeSingleTopic) {
 		t.Errorf("expected ErrVideoGroupMustBeSingleTopic, got %v", err)
@@ -113,7 +98,7 @@ func TestVideoGroupMustBeSingleTopic(t *testing.T) {
 
 func TestWriteMessageRejectedOnVideoTopic(t *testing.T) {
 	w := NewWriter(&bytes.Buffer{})
-	mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic("h264"))
+	mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic())
 	err := w.WriteMessage("cam", []byte("x"), 1)
 	if !errors.Is(err, ErrWriteMessageOnVideoTopic) {
 		t.Errorf("expected ErrWriteMessageOnVideoTopic, got %v", err)
@@ -133,7 +118,7 @@ func TestWriteVideoMessageRejectedOnNonVideoTopic(t *testing.T) {
 
 func TestFirstVideoMessageMustBeKeyFrame(t *testing.T) {
 	w := NewWriter(&bytes.Buffer{})
-	mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic("h264"))
+	mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic())
 	err := w.WriteVideoMessage("cam", []byte("p0"), 1, false)
 	if !errors.Is(err, ErrFirstVideoMessageMustBeKeyFrame) {
 		t.Errorf("expected ErrFirstVideoMessageMustBeKeyFrame, got %v", err)
@@ -160,7 +145,7 @@ func TestVideoGOPIntegrityChunkBoundary(t *testing.T) {
 
 	r := writerRoundTrip(t, func(w *Writer) {
 		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}},
-			WithChunkConfig(cfg), WithVideoTopic("h264"))
+			WithChunkConfig(cfg), WithVideoTopic())
 		writeVideo(t, w, "cam", frames)
 		mustCloseTopic(t, w)
 		mustClose(t, w)
@@ -228,7 +213,7 @@ func TestVideoNoFlushMidGOP(t *testing.T) {
 
 	r := writerRoundTrip(t, func(w *Writer) {
 		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}},
-			WithChunkConfig(cfg), WithVideoTopic("h264"))
+			WithChunkConfig(cfg), WithVideoTopic())
 		writeVideo(t, w, "cam", frames)
 		mustCloseTopic(t, w)
 		mustClose(t, w)
@@ -255,7 +240,7 @@ func TestSampleVideoSingleQueryReturnsGOPPrefix(t *testing.T) {
 		{ts: 40, isKeyFrame: false, data: []byte("P40")},
 	}
 	r, _ := buildSampleReader(t, func(w *Writer) {
-		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic("h264"))
+		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic())
 		writeVideo(t, w, "cam", frames)
 		mustCloseTopic(t, w)
 		mustClose(t, w)
@@ -291,7 +276,7 @@ func TestSampleVideoQueryOnKeyFrame(t *testing.T) {
 		{ts: 20, isKeyFrame: false, data: []byte("P20")},
 	}
 	r, _ := buildSampleReader(t, func(w *Writer) {
-		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic("h264"))
+		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic())
 		writeVideo(t, w, "cam", frames)
 		mustCloseTopic(t, w)
 		mustClose(t, w)
@@ -325,7 +310,7 @@ func TestSampleVideoIncrementalSameGOP(t *testing.T) {
 		{ts: 60, isKeyFrame: false, data: []byte("P5")},
 	}
 	r, _ := buildSampleReader(t, func(w *Writer) {
-		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic("h264"))
+		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic())
 		writeVideo(t, w, "cam", frames)
 		mustCloseTopic(t, w)
 		mustClose(t, w)
@@ -397,7 +382,7 @@ func TestSampleVideoSpanningTwoGOPs(t *testing.T) {
 	}
 	r, _ := buildSampleReader(t, func(w *Writer) {
 		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}},
-			WithChunkConfig(cfg), WithVideoTopic("h264"))
+			WithChunkConfig(cfg), WithVideoTopic())
 		writeVideo(t, w, "cam", frames)
 		mustCloseTopic(t, w)
 		mustClose(t, w)
@@ -433,7 +418,7 @@ func TestSampleVideoTwoQueriesSameTarget(t *testing.T) {
 		{ts: 30, isKeyFrame: false, data: []byte("P2")},
 	}
 	r, _ := buildSampleReader(t, func(w *Writer) {
-		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic("h264"))
+		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic())
 		writeVideo(t, w, "cam", frames)
 		mustCloseTopic(t, w)
 		mustClose(t, w)
@@ -471,7 +456,7 @@ func TestSampleVideoBeforeFirstKeyFrame(t *testing.T) {
 		{ts: 20, isKeyFrame: false, data: []byte("P")},
 	}
 	r, _ := buildSampleReader(t, func(w *Writer) {
-		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic("h264"))
+		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic())
 		writeVideo(t, w, "cam", frames)
 		mustCloseTopic(t, w)
 		mustClose(t, w)
@@ -495,7 +480,7 @@ func TestReadMessagesVideoDecodableSnapBack(t *testing.T) {
 		{ts: 40, isKeyFrame: false, data: []byte("P40")},
 	}
 	r := writerRoundTrip(t, func(w *Writer) {
-		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic("h264"))
+		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic())
 		writeVideo(t, w, "cam", frames)
 		mustCloseTopic(t, w)
 		mustClose(t, w)
@@ -535,7 +520,7 @@ func TestReadMessagesVideoDecodableSnapBackMultipleGOPs(t *testing.T) {
 	}
 	r := writerRoundTrip(t, func(w *Writer) {
 		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}},
-			WithChunkConfig(cfg), WithVideoTopic("h264"))
+			WithChunkConfig(cfg), WithVideoTopic())
 		writeVideo(t, w, "cam", frames)
 		mustCloseTopic(t, w)
 		mustClose(t, w)
@@ -559,7 +544,7 @@ func TestReadMessagesVideoNoSnapBackByDefault(t *testing.T) {
 		{ts: 30, isKeyFrame: false, data: []byte("P2")},
 	}
 	r := writerRoundTrip(t, func(w *Writer) {
-		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic("h264"))
+		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic())
 		writeVideo(t, w, "cam", frames)
 		mustCloseTopic(t, w)
 		mustClose(t, w)

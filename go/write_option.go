@@ -1,7 +1,5 @@
 package turbodata
 
-import "fmt"
-
 type WriteOption func(metadata map[string]any) error
 
 func WithChunkConfig(chunkConfig *ChunkConfig) WriteOption {
@@ -18,45 +16,35 @@ func WithCompression() WriteOption {
 	}
 }
 
-// validVideoCodecs is the set of codec strings accepted by WithVideoTopic.
-// These match Foxglove's CompressedVideo.format values for direct ecosystem interop.
-var validVideoCodecs = map[string]struct{}{
-	"h264": {},
-	"h265": {},
-	"vp9":  {},
-	"av1":  {},
-}
-
-// WithVideoTopic marks the group as carrying compressed video frames of the
-// given codec. Constraints:
+// WithVideoTopic marks the group as carrying compressed video frames. The
+// commitment this option makes:
 //
-//   - The group MUST contain exactly one topic (enforced in OpenTopics).
-//   - The group MUST NOT also use WithCompression (the codec already
-//     compresses; layering zstd buys ~nothing and forces whole-chunk
-//     decompression on read).
-//   - Callers MUST use Writer.WriteVideoMessage instead of WriteMessage.
-//   - First message on the topic MUST be a key frame.
-//   - v1 forbids B-frames; the topic metadata records has_b_frames=false.
+//   - On write, chunk boundaries are gated on key frames so a GOP is never
+//     split across two chunks. Callers MUST use Writer.WriteVideoMessage
+//     (which takes an isKeyFrame flag) instead of WriteMessage.
+//   - On read, the Sample API returns the anchor key frame together with
+//     the target frame (Frames + ResetDecoder, see SampleResult); the
+//     ReadMessages WithVideoDecodable option snaps StartTimestamp back to
+//     the nearest key frame so the decoder can start cold.
 //
-// Bitstream contract (documented, not validated):
+// Constraints enforced at OpenTopics:
 //
-//   - One coded frame per message.
-//   - h264 / h265: Annex-B NAL units. Parameter sets (SPS/PPS for h264;
-//     VPS/SPS/PPS for h265) in-band on every key frame.
-//   - av1: Low Overhead Bitstream Format (LOBF, AV1 spec §5.2). Sequence
-//     Header OBU in-band on every key frame.
-//   - vp9: bitstream units per frame; Uncompressed Frame Header on key frames.
-func WithVideoTopic(codec string) WriteOption {
+//   - The group MUST contain exactly one topic.
+//   - The group MUST NOT also use WithCompression: the codec already
+//     compresses the bytes, and chunk-level compression would force a
+//     whole-chunk decompression on read.
+//
+// First message on a video topic MUST be a key frame.
+//
+// The codec, frame-type structure, and bitstream framing are caller
+// concerns. If the caller wants to record codec info for downstream
+// consumers, they pass it in the per-topic metadata map themselves.
+func WithVideoTopic() WriteOption {
 	return func(metadata map[string]any) error {
-		if _, ok := validVideoCodecs[codec]; !ok {
-			return fmt.Errorf("codec %q: %w", codec, ErrUnknownVideoCodec)
-		}
 		if v, ok := metadata["is_compressed"].(bool); ok && v {
 			return ErrVideoTopicCannotBeCompressed
 		}
 		metadata["is_video"] = true
-		metadata["codec"] = codec
-		metadata["has_b_frames"] = false
 		return nil
 	}
 }
