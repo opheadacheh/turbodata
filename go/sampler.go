@@ -22,10 +22,44 @@ type SampleQuery struct {
 // message with timestamp <= Timestamps[j] for the topic (e.g. T precedes the
 // topic's first message). Data is an owned copy and is safe to retain after
 // the call returns.
+//
+// Video topics (opened with WithVideoTopic) also populate Frames and
+// ResetDecoder. The conventions, within a single Out[i] row (one topic,
+// strictly increasing query timestamps):
+//
+//   - For the first found result in each GOP encountered in the row:
+//     ResetDecoder = true, Frames = [keyframe ... target] in storage
+//     (decode) order. The caller's decoder must Reset() before feeding.
+//
+//   - For subsequent found results within the same GOP: ResetDecoder =
+//     false, Frames = [previous_target+1 ... target] (only the new frames
+//     since the previous query in this row). Frames is empty when two
+//     queries resolve to the same target frame.
+//
+//   - Data and Timestamp always describe the target frame.
+//
+// Process results within a row in order to benefit from decoder-state
+// carry-over. Skipping or reordering forces the caller to find the nearest
+// preceding ResetDecoder=true entry and feed forward from there.
+//
+// For non-video topics, Frames is nil and ResetDecoder is false.
 type SampleResult struct {
 	Found     bool
 	Timestamp int64
 	Data      []byte
+
+	// Video-only.
+	Frames       []Frame
+	ResetDecoder bool
+}
+
+// Frame is one coded video frame surfaced as part of a SampleResult's GOP
+// prefix or incremental tail. Data is an owned copy and is safe to retain
+// after Sample returns.
+type Frame struct {
+	Timestamp  int64
+	IsKeyFrame bool
+	Data       []byte
 }
 
 // DefaultSampleStrategy is the ReadStrategy Reader.Sample uses when the
@@ -135,7 +169,24 @@ func (r *Reader) Sample(queries []SampleQuery, opts ...SampleOption) ([][]Sample
 			row := hits[i]
 			out[i] = make([]SampleResult, len(row))
 			for j, h := range row {
-				out[i][j] = SampleResult{Found: h.Found, Timestamp: h.Timestamp, Data: h.Data}
+				var frames []Frame
+				if len(h.Frames) > 0 {
+					frames = make([]Frame, len(h.Frames))
+					for k, f := range h.Frames {
+						frames[k] = Frame{
+							Timestamp:  f.Timestamp,
+							IsKeyFrame: f.IsKeyFrame,
+							Data:       f.Data,
+						}
+					}
+				}
+				out[i][j] = SampleResult{
+					Found:        h.Found,
+					Timestamp:    h.Timestamp,
+					Data:         h.Data,
+					Frames:       frames,
+					ResetDecoder: h.ResetDecoder,
+				}
 			}
 		} else {
 			out[i] = []SampleResult{}

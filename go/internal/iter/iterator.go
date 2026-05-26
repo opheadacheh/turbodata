@@ -32,6 +32,11 @@ type MessageIterator struct {
 	Summary        *format.Summary
 	Strategy       *readstrategy.ReadStrategy // nil = default lazy path
 	TailPrefetch   int64
+	// VideoDecodable: when true, for any video topic in scope the effective
+	// per-group StartTimestamp is snapped backwards to the latest key frame
+	// whose timestamp is <= StartTimestamp. Lets the caller hand the
+	// resulting message sequence to a decoder cold.
+	VideoDecodable bool
 
 	// Default-path runtime state.
 	topicsGroupIterators []*TopicsGroupIterator
@@ -100,12 +105,118 @@ func (it *MessageIterator) Prepare() error {
 				continue
 			}
 
-			topicsGroupIt := newTopicsGroupIterator(it, topicIds, topicsInfo)
+			groupStart := it.StartTimestamp
+			if it.VideoDecodable && isVideoTopicsInfo(topicsInfo) {
+				snapped, err := snapStartToKeyFrame(it.rs, topicsInfo, it.StartTimestamp)
+				if err != nil {
+					return err
+				}
+				groupStart = snapped
+			}
+
+			topicsGroupIt := newTopicsGroupIteratorWithStart(it, topicIds, topicsInfo, groupStart)
 			if topicsGroupIt != nil {
 				it.topicsGroupIterators = append(it.topicsGroupIterators, topicsGroupIt)
 			}
 
 			break
+		}
+	}
+	return nil
+}
+
+// isVideoTopicsInfo reports whether the (single) topic in this group was
+// opened with WithVideoTopic. Video groups always have exactly one topic, so
+// inspecting the first topic's metadata is sufficient.
+func isVideoTopicsInfo(ti *format.TopicsInfo) bool {
+	if len(ti.TopicMetadatas) == 0 {
+		return false
+	}
+	v, _ := ti.TopicMetadatas[0].Metadata["is_video"].(bool)
+	return v
+}
+
+// snapStartToKeyFrame returns the timestamp of the latest key frame in
+// topicsInfo whose timestamp is <= origStart. If origStart precedes every key
+// frame in the file, returns origStart unchanged (no snap possible). On any
+// I/O error, returns the error.
+//
+// Implementation: locates the index chunk most likely to contain the key
+// frame (the one whose StartTimestamp is the largest still <= origStart),
+// loads + decompresses it, then walks its KeyFrameIndexes. If no key frame in
+// that chunk is <= origStart, falls back to the prior chunk's last key frame.
+// Beyond two chunks of fallback is impossible under the writer's GOP-integrity
+// rule: every chunk begins with a key frame for the video topic.
+func snapStartToKeyFrame(rs ReadSource, topicsInfo *format.TopicsInfo, origStart int64) (int64, error) {
+	infos := topicsInfo.IndexChunkInfoList
+	if len(infos) == 0 {
+		return origStart, nil
+	}
+
+	// Pick the candidate chunk: largest StartTimestamp <= origStart, or chunk
+	// 0 if origStart precedes everything.
+	c := -1
+	for i, info := range infos {
+		if info.StartTimestamp > origStart {
+			break
+		}
+		c = i
+	}
+	if c < 0 {
+		return origStart, nil
+	}
+
+	for c >= 0 {
+		ic, err := loadIndexChunkAt(rs, topicsInfo, c)
+		if err != nil {
+			return 0, err
+		}
+		ti := topicIndexFromIndexChunk(ic, topicsInfo.TopicMetadatas[0].Id)
+		if ti == nil || len(ti.KeyFrameIndexes) == 0 {
+			c--
+			continue
+		}
+		// Walk key frames backwards; first one with ts <= origStart wins.
+		for k := len(ti.KeyFrameIndexes) - 1; k >= 0; k-- {
+			mi := ti.MessageIndexes[ti.KeyFrameIndexes[k]]
+			if mi.Timestamp <= origStart {
+				return mi.Timestamp, nil
+			}
+		}
+		c--
+	}
+	// No key frame found anywhere <= origStart; keep the original start.
+	return origStart, nil
+}
+
+// loadIndexChunkAt fetches, decompresses and parses the index chunk at the
+// given index within topicsInfo. Standalone helper so both the default and
+// cost-aware paths can use the same snap-back logic without depending on each
+// other's buffering machinery.
+func loadIndexChunkAt(rs ReadSource, topicsInfo *format.TopicsInfo, c int) (*format.IndexChunk, error) {
+	infos := topicsInfo.IndexChunkInfoList
+	info := infos[c]
+	var ln int64
+	if c < len(infos)-1 {
+		ln = infos[c+1].Offset - info.Offset
+	} else {
+		ln = topicsInfo.TotalLen - info.Offset + infos[0].Offset
+	}
+	raw := make([]byte, ln)
+	if _, err := rs.ReadAt(raw, info.Offset); err != nil {
+		return nil, err
+	}
+	decompBuf := buffer.NewReusableBuffer()
+	if err := compress.DecompressInto(raw, decompBuf); err != nil {
+		return nil, err
+	}
+	return format.ReadIndexChunk(bytes.NewReader(decompBuf.Data))
+}
+
+func topicIndexFromIndexChunk(ic *format.IndexChunk, topicId uint16) *format.TopicIndex {
+	for _, ti := range ic.TopicIndexes {
+		if ti.Id == topicId {
+			return ti
 		}
 	}
 	return nil
@@ -125,6 +236,7 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 	type scopedGroup struct {
 		topicsInfo     *format.TopicsInfo
 		isCompressed   bool
+		startTimestamp int64                    // per-group start (snapped for video)
 		filteredInfos  []*format.IndexChunkInfo // chunks within [startTs, endTs]
 		filteredInfoLs []int64                  // byte lengths of those index chunks
 	}
@@ -144,11 +256,22 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 
 		isCompressed, _ := topicsInfo.TopicMetadatas[0].Metadata["is_compressed"].(bool)
 
+		// Per-group start: snapped back to a key frame for video topics when
+		// WithVideoDecodable is set; otherwise the iterator's StartTimestamp.
+		groupStart := it.StartTimestamp
+		if it.VideoDecodable && isVideoTopicsInfo(topicsInfo) {
+			snapped, err := snapStartToKeyFrame(it.rs, topicsInfo, it.StartTimestamp)
+			if err != nil {
+				return err
+			}
+			groupStart = snapped
+		}
+
 		// Time-range filter at the chunk level (same logic newTopicsGroupIterator uses).
 		filteredInfos := make([]*format.IndexChunkInfo, 0, len(topicsInfo.IndexChunkInfoList))
 		filteredLens := make([]int64, 0, len(topicsInfo.IndexChunkInfoList))
 		for i, info := range topicsInfo.IndexChunkInfoList {
-			if info.EndTimestamp < it.StartTimestamp {
+			if info.EndTimestamp < groupStart {
 				continue
 			}
 			if info.StartTimestamp > it.EndTimestamp {
@@ -171,6 +294,7 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 		scoped = append(scoped, &scopedGroup{
 			topicsInfo:     topicsInfo,
 			isCompressed:   isCompressed,
+			startTimestamp: groupStart,
 			filteredInfos:  filteredInfos,
 			filteredInfoLs: filteredLens,
 		})
@@ -234,7 +358,7 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 				ic.TopicIndexes,
 				ic.UncompressedLen,
 				topicIds,
-				it.StartTimestamp,
+				g.startTimestamp,
 				it.EndTimestamp,
 				mergeScratch,
 				&msgs,

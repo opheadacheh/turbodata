@@ -27,10 +27,24 @@ type SampleSpec struct {
 // SampleHit is the engine-level result for one (spec, timestamp): the floor
 // message bytes, or Found=false when no message with ts <= the requested T
 // exists for the topic. Data is an owned copy; safe to retain.
+//
+// For video topics, Frames and ResetDecoder carry GOP-prefix semantics
+// described on the public turbodata.SampleResult.
 type SampleHit struct {
-	Found     bool
-	Timestamp int64
-	Data      []byte
+	Found        bool
+	Timestamp    int64
+	Data         []byte
+	Frames       []SampleFrame
+	ResetDecoder bool
+}
+
+// SampleFrame is the engine-level equivalent of turbodata.Frame. Kept
+// separate to avoid an import cycle between the public turbodata package and
+// the internal iter package.
+type SampleFrame struct {
+	Timestamp  int64
+	IsKeyFrame bool
+	Data       []byte
 }
 
 // Sample resolves floor messages for the given specs in two concurrent I/O
@@ -67,6 +81,13 @@ type resolvedItem struct {
 	msgOffInChunk int64
 	msgLen        int64
 	timestamp     int64
+
+	// Video-only: positions into the topic's MessageIndexes in the cached
+	// IndexChunk. keyframeMsgIdx is the anchor key frame for the GOP that
+	// contains the target; targetMsgIdx is the target's position. Both are
+	// set by resolveItemsInChunk for video queries; unused otherwise.
+	keyframeMsgIdx int
+	targetMsgIdx   int
 }
 
 type queryState struct {
@@ -74,6 +95,7 @@ type queryState struct {
 	groupIdx     int
 	topicId      uint16
 	isCompressed bool
+	isVideo      bool
 	results      []SampleHit
 	pending      []pendingItem
 	resolved     []resolvedItem
@@ -131,6 +153,8 @@ func (e *sampleEngine) resolveTopic(qs *queryState) {
 				qs.topicId = tm.Id
 				compressed, _ := ti.TopicMetadatas[0].Metadata["is_compressed"].(bool)
 				qs.isCompressed = compressed
+				video, _ := ti.TopicMetadatas[0].Metadata["is_video"].(bool)
+				qs.isVideo = video
 				return
 			}
 		}
@@ -296,6 +320,11 @@ func (e *sampleEngine) resolveItemsInChunk(qs *queryState, c int, cache *chunkCa
 	}
 	mis := ti.MessageIndexes
 	lens := cache.perTopicLens[qs.topicId]
+	// For video, kf tracks the most recent key frame index <= k. The writer's
+	// GOP-integrity rule ensures every chunk for a video topic begins with a
+	// key frame (KeyFrameIndexes[0] == 0), so kf is always findable when k is.
+	kf := 0
+	kfPos := 0 // position within ti.KeyFrameIndexes corresponding to kf
 	k := 0
 	for _, p := range items {
 		T := qs.spec.Timestamps[p.tIdx]
@@ -310,13 +339,30 @@ func (e *sampleEngine) resolveItemsInChunk(qs *queryState, c int, cache *chunkCa
 			}
 			continue
 		}
-		qs.resolved = append(qs.resolved, resolvedItem{
+		item := resolvedItem{
 			tIdx:          p.tIdx,
 			chunkKey:      chunkKey{qs.groupIdx, c},
 			msgOffInChunk: mis[k].OffsetInChunk,
 			msgLen:        lens[k],
 			timestamp:     mis[k].Timestamp,
-		})
+		}
+		if qs.isVideo {
+			kfs := ti.KeyFrameIndexes
+			if len(kfs) == 0 || int(kfs[0]) > k {
+				// No anchor key frame for this target in this chunk: violates
+				// the writer's GOP-integrity invariant. Treat as not found
+				// rather than emit an undecodable single frame.
+				qs.results[p.tIdx].Found = false
+				continue
+			}
+			for kfPos+1 < len(kfs) && int(kfs[kfPos+1]) <= k {
+				kfPos++
+			}
+			kf = int(kfs[kfPos])
+			item.keyframeMsgIdx = kf
+			item.targetMsgIdx = k
+		}
+		qs.resolved = append(qs.resolved, item)
 	}
 	return fallback
 }
@@ -387,9 +433,12 @@ func countPending(states []*queryState) int {
 // runPhaseB issues data reads for every resolved item in one concurrent wave
 // and copies the message bytes into the result slots. Compressed groups
 // register one Range per unique chunk (whole compressed data chunk, slicing
-// out individual messages after a single decompression). Uncompressed groups
-// register one Range per message; iorange.Plan coalesces neighbors per the
-// strategy.
+// out individual messages after a single decompression). Uncompressed
+// non-video groups register one Range per message; iorange.Plan coalesces
+// neighbors per the strategy. Video groups register one Range per resolved
+// item that spans the GOP prefix [keyframe..target], so iorange.Plan can
+// coalesce adjacent prefixes and the materialization step can build
+// incremental Frames slices keyed off the prefix boundaries.
 func (e *sampleEngine) runPhaseB() error {
 	type planEntry struct {
 		key    chunkKey
@@ -397,20 +446,64 @@ func (e *sampleEngine) runPhaseB() error {
 		length int64
 	}
 	seenChunk := make(map[chunkKey]struct{})
+
+	// Video: dedupe per (chunk, keyframe). All queries that share a GOP
+	// register a single range from the keyframe to the FURTHEST target
+	// across those queries. Reads aren't duplicated; shorter-target queries
+	// just slice less of the same loaded bytes.
+	type videoKey struct {
+		chunkKey       chunkKey
+		keyframeMsgIdx int
+	}
+	type videoExtent struct {
+		topicId        uint16
+		startInChunk   int64
+		endInChunkExcl int64
+	}
+	videoExtents := make(map[videoKey]*videoExtent)
+
 	var entries []planEntry
 	for _, qs := range e.queryStates {
 		for _, r := range qs.resolved {
 			ic := e.chunks[r.chunkKey].ic
-			if qs.isCompressed {
+			switch {
+			case qs.isCompressed:
 				if _, dup := seenChunk[r.chunkKey]; dup {
 					continue
 				}
 				seenChunk[r.chunkKey] = struct{}{}
 				entries = append(entries, planEntry{key: r.chunkKey, offset: ic.ChunkOffset, length: ic.ChunkLen})
-			} else {
+			case qs.isVideo:
+				cc := e.chunks[r.chunkKey]
+				ti := findTopicIndex(cc.ic, qs.topicId)
+				mis := ti.MessageIndexes
+				lens := cc.perTopicLens[qs.topicId]
+				start := mis[r.keyframeMsgIdx].OffsetInChunk
+				endExcl := mis[r.targetMsgIdx].OffsetInChunk + lens[r.targetMsgIdx]
+				vk := videoKey{r.chunkKey, r.keyframeMsgIdx}
+				if ve, ok := videoExtents[vk]; ok {
+					if endExcl > ve.endInChunkExcl {
+						ve.endInChunkExcl = endExcl
+					}
+				} else {
+					videoExtents[vk] = &videoExtent{
+						topicId:        qs.topicId,
+						startInChunk:   start,
+						endInChunkExcl: endExcl,
+					}
+				}
+			default:
 				entries = append(entries, planEntry{key: r.chunkKey, offset: ic.ChunkOffset + r.msgOffInChunk, length: r.msgLen})
 			}
 		}
+	}
+	for vk, ve := range videoExtents {
+		ic := e.chunks[vk.chunkKey].ic
+		entries = append(entries, planEntry{
+			key:    vk.chunkKey,
+			offset: ic.ChunkOffset + ve.startInChunk,
+			length: ve.endInChunkExcl - ve.startInChunk,
+		})
 	}
 	if len(entries) == 0 {
 		return nil
@@ -428,9 +521,7 @@ func (e *sampleEngine) runPhaseB() error {
 	}
 	loaded := iorange.NewLoadedBytes(ranges, locs, bufs)
 
-	// Group compressed resolved items by chunk so each chunk is decompressed
-	// exactly once and its decompressed bytes can be reused across messages
-	// without a per-chunk persistent copy.
+	// ---- Compressed (non-video) materialization: per-chunk one-time decompress.
 	type byChunkItem struct {
 		qs *queryState
 		r  resolvedItem
@@ -460,8 +551,9 @@ func (e *sampleEngine) runPhaseB() error {
 		}
 	}
 
+	// ---- Uncompressed non-video materialization: per-message copy.
 	for _, qs := range e.queryStates {
-		if qs.isCompressed {
+		if qs.isCompressed || qs.isVideo {
 			continue
 		}
 		for _, r := range qs.resolved {
@@ -474,7 +566,120 @@ func (e *sampleEngine) runPhaseB() error {
 			qs.results[r.tIdx].Data = data
 		}
 	}
+
+	// ---- Video materialization: incremental Frames + ResetDecoder.
+	for _, qs := range e.queryStates {
+		if !qs.isVideo {
+			continue
+		}
+		e.materializeVideo(qs, loaded)
+	}
 	return nil
+}
+
+// materializeVideo walks one query's resolved items in target-timestamp order
+// and emits incremental Frames + ResetDecoder per the public contract on
+// SampleResult. See sampler.go for the user-facing semantics.
+func (e *sampleEngine) materializeVideo(qs *queryState, loaded *iorange.LoadedBytes) {
+	if len(qs.resolved) == 0 {
+		return
+	}
+	// Resolved items can arrive out of tIdx order if Phase A required
+	// fallbacks. Sort by tIdx so the row's natural processing order matches
+	// the caller's expectation.
+	resolved := make([]resolvedItem, len(qs.resolved))
+	copy(resolved, qs.resolved)
+	sort.Slice(resolved, func(i, j int) bool { return resolved[i].tIdx < resolved[j].tIdx })
+
+	// Decoder state continuity is per-row, scoped to a single GOP (= same
+	// chunkKey + same keyframeMsgIdx). Track the previous found item's GOP
+	// and target so consecutive same-GOP items emit only the new tail frames.
+	var (
+		havePrev         bool
+		prevChunk        chunkKey
+		prevKeyframeIdx  int
+		prevTargetMsgIdx int
+		prevTargetTIdx   int
+	)
+
+	for _, r := range resolved {
+		cc := e.chunks[r.chunkKey]
+		ic := cc.ic
+		ti := findTopicIndex(ic, qs.topicId)
+		mis := ti.MessageIndexes
+		lens := cc.perTopicLens[qs.topicId]
+
+		// Reusable lookup of whether a per-topic message index is a key frame.
+		isKey := func(msgIdx int) bool {
+			for _, kf := range ti.KeyFrameIndexes {
+				if int(kf) == msgIdx {
+					return true
+				}
+				if int(kf) > msgIdx {
+					return false
+				}
+			}
+			return false
+		}
+
+		// Same GOP as previous resolved item in this row?
+		sameGOP := havePrev && prevChunk == r.chunkKey && prevKeyframeIdx == r.keyframeMsgIdx
+
+		var startIdx int
+		var reset bool
+		if !sameGOP {
+			startIdx = r.keyframeMsgIdx
+			reset = true
+		} else {
+			startIdx = prevTargetMsgIdx + 1
+			reset = false
+		}
+
+		// The Phase B registered range starts at the GOP's keyframe in this
+		// chunk and is long enough to cover the furthest target across all
+		// queries in this GOP. We slice into it by per-frame offset.
+		prefixRangeOffset := ic.ChunkOffset + mis[r.keyframeMsgIdx].OffsetInChunk
+		raw := loaded.Get(prefixRangeOffset)
+		baseInChunk := mis[r.keyframeMsgIdx].OffsetInChunk
+
+		// startIdx > targetMsgIdx happens when two queries resolve to the
+		// exact same target frame within a GOP: Frames is empty, no reset.
+		var frames []SampleFrame
+		if startIdx <= r.targetMsgIdx {
+			frames = make([]SampleFrame, 0, r.targetMsgIdx-startIdx+1)
+			for i := startIdx; i <= r.targetMsgIdx; i++ {
+				frameStart := mis[i].OffsetInChunk - baseInChunk
+				frameLen := lens[i]
+				data := make([]byte, frameLen)
+				copy(data, raw[frameStart:frameStart+frameLen])
+				frames = append(frames, SampleFrame{
+					Timestamp:  mis[i].Timestamp,
+					IsKeyFrame: isKey(i),
+					Data:       data,
+				})
+			}
+			// Caller-visible Data/Timestamp track the target frame (the last
+			// new frame in this incremental slice, by construction).
+			tgt := &frames[len(frames)-1]
+			qs.results[r.tIdx].Data = tgt.Data
+			qs.results[r.tIdx].Timestamp = tgt.Timestamp
+		} else {
+			// Empty Frames: the target was already emitted by the previous
+			// in-row result. Reuse that result's Data so this row's caller
+			// can read .Data without checking Frames at all.
+			qs.results[r.tIdx].Data = qs.results[prevTargetTIdx].Data
+			qs.results[r.tIdx].Timestamp = mis[r.targetMsgIdx].Timestamp
+		}
+		qs.results[r.tIdx].Found = true
+		qs.results[r.tIdx].Frames = frames
+		qs.results[r.tIdx].ResetDecoder = reset
+
+		havePrev = true
+		prevChunk = r.chunkKey
+		prevKeyframeIdx = r.keyframeMsgIdx
+		prevTargetMsgIdx = r.targetMsgIdx
+		prevTargetTIdx = r.tIdx
+	}
 }
 
 func (e *sampleEngine) collect() [][]SampleHit {

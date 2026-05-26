@@ -41,10 +41,17 @@ type TopicsGroupIterator struct {
 }
 
 func newTopicsGroupIterator(it *MessageIterator, topicIds map[uint16]struct{}, topicsInfo *format.TopicsInfo) *TopicsGroupIterator {
+	return newTopicsGroupIteratorWithStart(it, topicIds, topicsInfo, it.StartTimestamp)
+}
+
+// newTopicsGroupIteratorWithStart is the variant used when the per-group
+// start timestamp differs from the iterator's overall StartTimestamp (e.g.
+// after snap-back to a key frame for a video topic under WithVideoDecodable).
+func newTopicsGroupIteratorWithStart(it *MessageIterator, topicIds map[uint16]struct{}, topicsInfo *format.TopicsInfo, startTimestamp int64) *TopicsGroupIterator {
 	indexChunkInfoList := make([]*format.IndexChunkInfo, 0, len(topicsInfo.IndexChunkInfoList))
 	indexChunkInfoLens := make([]int64, 0, len(topicsInfo.IndexChunkInfoList))
 	for i, indexChunkInfo := range topicsInfo.IndexChunkInfoList {
-		if indexChunkInfo.EndTimestamp < it.StartTimestamp {
+		if indexChunkInfo.EndTimestamp < startTimestamp {
 			continue
 		}
 
@@ -85,7 +92,7 @@ func newTopicsGroupIterator(it *MessageIterator, topicIds map[uint16]struct{}, t
 		filteredMessageLens:    make([]int64, 0),
 
 		topicIds:        topicIds,
-		startTimestamp:  it.StartTimestamp,
+		startTimestamp:  startTimestamp,
 		endTimestamp:    it.EndTimestamp,
 		order:           it.Order,
 		isCompressed:    isCompressed,
