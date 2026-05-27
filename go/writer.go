@@ -244,9 +244,11 @@ func (w *Writer) WriteVideoMessage(topicName string, message []byte, timestamp i
 		return fmt.Errorf("topic name: %s: %w", topicName, ErrTopicNotRegistered)
 	}
 
-	// First-ever message on this topic must be a key frame, otherwise the
-	// leading GOP would be undecodable.
-	if !isKeyFrame && !w.topicHasAnyMessage(id) {
+	// First message of any chunk must be a key frame. Because we only ever
+	// flush mid-stream at key frames (the GOP-integrity rule), the only time
+	// buf.Len() == 0 here is on the very first message of the topic — which
+	// is exactly the case this contract wants to catch.
+	if !isKeyFrame && w.buf.Len() == 0 {
 		return ErrFirstVideoMessageMustBeKeyFrame
 	}
 
@@ -290,23 +292,6 @@ func (w *Writer) WriteVideoMessage(topicName string, message []byte, timestamp i
 		w.chunkStatus.count++
 	}
 	return nil
-}
-
-// topicHasAnyMessage reports whether the topic has any message in the
-// in-progress chunk or in any earlier chunk of the current open-close cycle.
-// Used only to enforce the first-message-must-be-keyframe rule for video.
-func (w *Writer) topicHasAnyMessage(id uint16) bool {
-	if len(w.idToMessageIndexes[id]) > 0 {
-		return true
-	}
-	for _, ic := range w.indexChunks {
-		for _, ti := range ic.TopicIndexes {
-			if ti.Id == id && len(ti.MessageIndexes) > 0 {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // thresholdReached returns whether the in-progress chunk has reached the

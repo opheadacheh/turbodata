@@ -107,11 +107,7 @@ func (it *MessageIterator) Prepare() error {
 
 			groupStart := it.StartTimestamp
 			if it.VideoDecodable && isVideoTopicsInfo(topicsInfo) {
-				snapped, err := snapStartToKeyFrame(it.rs, topicsInfo, it.StartTimestamp)
-				if err != nil {
-					return err
-				}
-				groupStart = snapped
+				groupStart = snapStartToKeyFrame(topicsInfo, it.StartTimestamp)
 			}
 
 			topicsGroupIt := newTopicsGroupIteratorWithStart(it, topicIds, topicsInfo, groupStart)
@@ -136,90 +132,29 @@ func isVideoTopicsInfo(ti *format.TopicsInfo) bool {
 	return v
 }
 
-// snapStartToKeyFrame returns the timestamp of the latest key frame in
-// topicsInfo whose timestamp is <= origStart. If origStart precedes every key
-// frame in the file, returns origStart unchanged (no snap possible). On any
-// I/O error, returns the error.
+// snapStartToKeyFrame returns the timestamp of the key frame anchoring the
+// GOP that contains origStart. Zero I/O: it walks the in-memory
+// IndexChunkInfoList only.
 //
-// Implementation: locates the index chunk most likely to contain the key
-// frame (the one whose StartTimestamp is the largest still <= origStart),
-// loads + decompresses it, then walks its KeyFrameIndexes. If no key frame in
-// that chunk is <= origStart, falls back to the prior chunk's last key frame.
-// Beyond two chunks of fallback is impossible under the writer's GOP-integrity
-// rule: every chunk begins with a key frame for the video topic.
-func snapStartToKeyFrame(rs ReadSource, topicsInfo *format.TopicsInfo, origStart int64) (int64, error) {
+// This works because of the writer's GOP-integrity invariant: every chunk for
+// a video topic begins with a key frame, and IndexChunkInfo.StartTimestamp is
+// the timestamp of that chunk's first message. So the chunk whose
+// StartTimestamp is the largest still <= origStart is the GOP that contains
+// origStart, and its StartTimestamp is exactly the anchoring key frame's
+// timestamp.
+//
+// If origStart precedes every chunk in the topic, returns origStart unchanged
+// (no snap-back possible).
+func snapStartToKeyFrame(topicsInfo *format.TopicsInfo, origStart int64) int64 {
 	infos := topicsInfo.IndexChunkInfoList
-	if len(infos) == 0 {
-		return origStart, nil
-	}
-
-	// Pick the candidate chunk: largest StartTimestamp <= origStart, or chunk
-	// 0 if origStart precedes everything.
-	c := -1
-	for i, info := range infos {
+	snap := origStart
+	for _, info := range infos {
 		if info.StartTimestamp > origStart {
 			break
 		}
-		c = i
+		snap = info.StartTimestamp
 	}
-	if c < 0 {
-		return origStart, nil
-	}
-
-	for c >= 0 {
-		ic, err := loadIndexChunkAt(rs, topicsInfo, c)
-		if err != nil {
-			return 0, err
-		}
-		ti := topicIndexFromIndexChunk(ic, topicsInfo.TopicMetadatas[0].Id)
-		if ti == nil || len(ti.KeyFrameIndexes) == 0 {
-			c--
-			continue
-		}
-		// Walk key frames backwards; first one with ts <= origStart wins.
-		for k := len(ti.KeyFrameIndexes) - 1; k >= 0; k-- {
-			mi := ti.MessageIndexes[ti.KeyFrameIndexes[k]]
-			if mi.Timestamp <= origStart {
-				return mi.Timestamp, nil
-			}
-		}
-		c--
-	}
-	// No key frame found anywhere <= origStart; keep the original start.
-	return origStart, nil
-}
-
-// loadIndexChunkAt fetches, decompresses and parses the index chunk at the
-// given index within topicsInfo. Standalone helper so both the default and
-// cost-aware paths can use the same snap-back logic without depending on each
-// other's buffering machinery.
-func loadIndexChunkAt(rs ReadSource, topicsInfo *format.TopicsInfo, c int) (*format.IndexChunk, error) {
-	infos := topicsInfo.IndexChunkInfoList
-	info := infos[c]
-	var ln int64
-	if c < len(infos)-1 {
-		ln = infos[c+1].Offset - info.Offset
-	} else {
-		ln = topicsInfo.TotalLen - info.Offset + infos[0].Offset
-	}
-	raw := make([]byte, ln)
-	if _, err := rs.ReadAt(raw, info.Offset); err != nil {
-		return nil, err
-	}
-	decompBuf := buffer.NewReusableBuffer()
-	if err := compress.DecompressInto(raw, decompBuf); err != nil {
-		return nil, err
-	}
-	return format.ReadIndexChunk(bytes.NewReader(decompBuf.Data))
-}
-
-func topicIndexFromIndexChunk(ic *format.IndexChunk, topicId uint16) *format.TopicIndex {
-	for _, ti := range ic.TopicIndexes {
-		if ti.Id == topicId {
-			return ti
-		}
-	}
-	return nil
+	return snap
 }
 
 // prepareCostAware sets up the cost-aware reader path: pre-fetch all index
@@ -260,11 +195,7 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 		// WithVideoDecodable is set; otherwise the iterator's StartTimestamp.
 		groupStart := it.StartTimestamp
 		if it.VideoDecodable && isVideoTopicsInfo(topicsInfo) {
-			snapped, err := snapStartToKeyFrame(it.rs, topicsInfo, it.StartTimestamp)
-			if err != nil {
-				return err
-			}
-			groupStart = snapped
+			groupStart = snapStartToKeyFrame(topicsInfo, it.StartTimestamp)
 		}
 
 		// Time-range filter at the chunk level (same logic newTopicsGroupIterator uses).
