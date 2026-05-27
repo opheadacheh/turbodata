@@ -2,3 +2,5 @@
 
 *.mcap
 *.td
+
+/playground/
