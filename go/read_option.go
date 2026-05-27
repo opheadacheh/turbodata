@@ -80,3 +80,22 @@ func WithTailPrefetch(size int64) ReadOption {
 		return nil
 	}
 }
+
+// WithVideoDecodable makes the iterator return a decoder-ready sequence for
+// any video topic in scope: per video group, the effective StartTimestamp is
+// snapped backwards to the latest key frame whose timestamp is <=
+// StartTimestamp. The caller can then feed the produced messages to a video
+// decoder cold and reach the requested time with correct state.
+//
+// Without this option, video topics behave like any other topic (messages
+// start at the literal StartTimestamp, which may land mid-GOP and be
+// undecodable on its own). Use the bare iterator when you only want to scan
+// the file, not decode it.
+//
+// Non-video topics are unaffected.
+func WithVideoDecodable() ReadOption {
+	return func(it *iter.MessageIterator) error {
+		it.VideoDecodable = true
+		return nil
+	}
+}

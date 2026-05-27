@@ -17,6 +17,11 @@ type WriterConfig struct {
 	topicIds     []uint16
 	chunkConfig  *ChunkConfig
 	isCompressed bool
+
+	// isVideo is true when this group was opened with WithVideoTopic.
+	// Gates one-topic-per-group, keyframe-aware chunking, and the
+	// WriteMessage / WriteVideoMessage routing checks.
+	isVideo bool
 }
 
 type Writer struct {
@@ -29,6 +34,10 @@ type Writer struct {
 	// Chunk-level state.
 	chunkStatus        *ChunkStatus
 	idToMessageIndexes map[uint16][]*format.MessageIndex
+	// idToKeyFrameIndexes accumulates per-topic key frame positions
+	// (indexes into idToMessageIndexes[id]) for the in-progress chunk.
+	// Reset per topic at chunk flush. Non-video topics never populate this.
+	idToKeyFrameIndexes map[uint16][]uint32
 
 	// Topic-level state.
 	lastTimestamp int64
@@ -59,7 +68,8 @@ func NewWriter(w io.Writer) *Writer {
 		compressBuf: &buffer.ReusableBuffer{
 			Data: make([]byte, 0),
 		},
-		idToMessageIndexes: make(map[uint16][]*format.MessageIndex),
+		idToMessageIndexes:  make(map[uint16][]*format.MessageIndex),
+		idToKeyFrameIndexes: make(map[uint16][]uint32),
 	}
 }
 
@@ -85,6 +95,24 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 		}
 	}
 
+	// Detect whether any topic in this group was opened with WithVideoTopic.
+	// Video groups are constrained: exactly one topic, never co-compressed.
+	anyVideo := false
+	for i := range metadatas {
+		if v, ok := metadatas[i]["is_video"].(bool); ok && v {
+			anyVideo = true
+			break
+		}
+	}
+	if anyVideo {
+		if len(names) != 1 {
+			return ErrVideoGroupMustBeSingleTopic
+		}
+		if v, ok := metadatas[0]["is_compressed"].(bool); ok && v {
+			return ErrVideoTopicCannotBeCompressed
+		}
+	}
+
 	topicMedatas := make([]*format.TopicMetadata, len(names))
 	namesToIds := make(map[string]uint16)
 	topicIds := make([]uint16, len(names))
@@ -99,6 +127,7 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 		namesToIds[names[i]] = w.currentTopicId
 		topicIds[i] = w.currentTopicId
 		w.idToMessageIndexes[w.currentTopicId] = []*format.MessageIndex{}
+		w.idToKeyFrameIndexes[w.currentTopicId] = []uint32{}
 	}
 
 	w.summary.TopicsInfos = append(w.summary.TopicsInfos, &format.TopicsInfo{
@@ -125,6 +154,7 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 		topicIds:     topicIds,
 		chunkConfig:  chunkConfig,
 		isCompressed: isCompressed,
+		isVideo:      anyVideo,
 	}
 
 	w.chunkStatus = &ChunkStatus{
@@ -138,6 +168,9 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 func (w *Writer) WriteMessage(topicName string, message []byte, timestamp int64) error {
 	if !w.isTopicOpen {
 		return ErrTopicNotOpened
+	}
+	if w.writerConfig.isVideo {
+		return ErrWriteMessageOnVideoTopic
 	}
 
 	if timestamp < w.lastTimestamp {
@@ -180,6 +213,111 @@ func (w *Writer) WriteMessage(topicName string, message []byte, timestamp int64)
 	return nil
 }
 
+// WriteVideoMessage appends one coded video frame to the (single) video topic
+// in the currently-open group. isKeyFrame must reflect whether the message's
+// bytes contain a key frame (IDR for h264, IRAP for h265, KEY_FRAME for av1,
+// keyframe for vp9). Turbodata does not parse the bitstream; the caller is
+// responsible for setting isKeyFrame correctly.
+//
+// Chunking: ChunkConfig thresholds are treated as a lower bound. The current
+// chunk is only flushed when a key frame arrives AND the threshold has been
+// reached. This guarantees a GOP is never split across two chunks, so a
+// random-access read for any frame in a GOP requires at most one data chunk.
+//
+// First-message rule: the first message on a video topic MUST be a key frame
+// (returns ErrFirstVideoMessageMustBeKeyFrame otherwise). Otherwise the
+// leading GOP would be undecodable.
+func (w *Writer) WriteVideoMessage(topicName string, message []byte, timestamp int64, isKeyFrame bool) error {
+	if !w.isTopicOpen {
+		return ErrTopicNotOpened
+	}
+	if !w.writerConfig.isVideo {
+		return ErrWriteVideoMessageOnNonVideoTopic
+	}
+
+	if timestamp < w.lastTimestamp {
+		return fmt.Errorf("timestamp cannot decrease, current: %d < last: %d: %w", timestamp, w.lastTimestamp, ErrTimestampDecreases)
+	}
+
+	id, ok := w.writerConfig.namesToIds[topicName]
+	if !ok {
+		return fmt.Errorf("topic name: %s: %w", topicName, ErrTopicNotRegistered)
+	}
+
+	// First message of any chunk must be a key frame. Because we only ever
+	// flush mid-stream at key frames (the GOP-integrity rule), the only time
+	// buf.Len() == 0 here is on the very first message of the topic — which
+	// is exactly the case this contract wants to catch.
+	if !isKeyFrame && w.buf.Len() == 0 {
+		return ErrFirstVideoMessageMustBeKeyFrame
+	}
+
+	// Keyframe-gated chunk boundary: only flush at a key frame, only when the
+	// threshold is met by the messages CURRENTLY in the chunk (which end at
+	// w.lastTimestamp; the incoming keyframe isn't in the chunk yet and will
+	// either join the current chunk or start the next one depending on the
+	// flush decision). This is what guarantees GOP integrity.
+	if isKeyFrame && w.buf.Len() > 0 && w.thresholdReached(w.lastTimestamp) {
+		if err := w.writeChunk(); err != nil {
+			return err
+		}
+	}
+
+	w.lastTimestamp = timestamp
+	offsetInChunk := int64(w.buf.Len())
+	w.idToMessageIndexes[id] = append(w.idToMessageIndexes[id], &format.MessageIndex{
+		Timestamp:     timestamp,
+		OffsetInChunk: offsetInChunk,
+	})
+	if isKeyFrame {
+		// uint32: per-chunk message-index position of this key frame.
+		// Wire format reserves uint32; chunks holding > 4 G messages of one
+		// topic are not a real concern.
+		w.idToKeyFrameIndexes[id] = append(w.idToKeyFrameIndexes[id],
+			uint32(len(w.idToMessageIndexes[id])-1))
+	}
+	w.buf.Write(message)
+
+	// Maintain chunk-status counters for symmetry with the non-video path so
+	// duration/count thresholds are observable; we don't act on them inside a
+	// GOP though - thresholdReached gates the flush above.
+	switch w.writerConfig.chunkConfig.Mode {
+	case ChunkThresholdModeSize:
+		w.chunkStatus.size += int64(len(message))
+	case ChunkThresholdModeDuration:
+		if w.chunkStatus.startTimestamp == -1 {
+			w.chunkStatus.startTimestamp = timestamp
+		}
+	case ChunkThresholdModeCount:
+		w.chunkStatus.count++
+	}
+	return nil
+}
+
+// thresholdReached returns whether the in-progress chunk has reached the
+// configured threshold. lastChunkTimestamp is the timestamp of the latest
+// message currently buffered in the chunk (i.e. w.lastTimestamp at the
+// caller's point of view), used only by ChunkThresholdModeDuration.
+//
+// Factored out so WriteVideoMessage can defer the actual flush to a key
+// frame boundary while still using the same threshold semantics as
+// WriteMessage's inline checks.
+func (w *Writer) thresholdReached(lastChunkTimestamp int64) bool {
+	cfg := w.writerConfig.chunkConfig
+	switch cfg.Mode {
+	case ChunkThresholdModeSize:
+		return w.chunkStatus.size >= cfg.Size
+	case ChunkThresholdModeDuration:
+		if w.chunkStatus.startTimestamp == -1 {
+			return false
+		}
+		return lastChunkTimestamp-w.chunkStatus.startTimestamp >= cfg.Duration
+	case ChunkThresholdModeCount:
+		return w.chunkStatus.count >= cfg.Count
+	}
+	return false
+}
+
 func (w *Writer) CloseTopic() error {
 	if !w.isTopicOpen {
 		return ErrTopicAlreadyClosed
@@ -213,12 +351,20 @@ func (w *Writer) writeChunk() error {
 		if len(messageIndexes) == 0 {
 			continue
 		}
+		// Take ownership of the per-topic key-frame slice for this chunk and
+		// reset it for the next one. Non-video topics keep an empty slice,
+		// matching the prior behaviour.
+		keyFrameIndexes := w.idToKeyFrameIndexes[id]
+		if keyFrameIndexes == nil {
+			keyFrameIndexes = []uint32{}
+		}
 		topicIndexes = append(topicIndexes, &format.TopicIndex{
 			Id:              id,
 			MessageIndexes:  messageIndexes,
-			KeyFrameIndexes: []uint32{},
+			KeyFrameIndexes: keyFrameIndexes,
 		})
 		w.idToMessageIndexes[id] = []*format.MessageIndex{}
+		w.idToKeyFrameIndexes[id] = []uint32{}
 	}
 
 	w.indexChunks = append(w.indexChunks, &format.IndexChunk{
