@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"sort"
 
 	"turbodata/format"
@@ -121,6 +122,13 @@ type sampleEngine struct {
 	queryStates    []*queryState
 	chunks         map[chunkKey]*chunkCache // decoded across all Phase A waves
 	videoDecodable bool                     // gates GOP-prefix treatment of video topics
+
+	// Reused across all chunk decodes in buildChunkCache. The merge scratch
+	// and the flat output slices are recycled per chunk; the per-chunk
+	// perTopicLens they feed are allocated fresh and retained in chunks.
+	mergeScratch *sortAndFilterMergeScratch
+	sfMsgs       []*messageIndexWithTopicId
+	sfLens       []int64
 }
 
 func newSampleEngine(rs ReadSource, summary *format.Summary, specs []SampleSpec, strategy readstrategy.ReadStrategy, videoDecodable bool) *sampleEngine {
@@ -132,6 +140,7 @@ func newSampleEngine(rs ReadSource, summary *format.Summary, specs []SampleSpec,
 		ctx:            context.Background(),
 		chunks:         make(map[chunkKey]*chunkCache),
 		videoDecodable: videoDecodable,
+		mergeScratch:   newSortAndFilterMergeScratch(),
 	}
 	e.queryStates = make([]*queryState, len(specs))
 	for i, spec := range specs {
@@ -302,7 +311,7 @@ func (e *sampleEngine) fetchAndDecodeIndexChunks(needs []chunkNeed, decompBuf *b
 		if err != nil {
 			return err
 		}
-		e.chunks[n.key] = buildChunkCache(ic)
+		e.chunks[n.key] = e.buildChunkCache(ic)
 	}
 	return nil
 }
@@ -383,39 +392,31 @@ func findTopicIndex(ic *format.IndexChunk, topicId uint16) *format.TopicIndex {
 	return nil
 }
 
-// buildChunkCache flattens all topics' MessageIndexes into one offset-sorted
-// list to derive per-message lengths (next message's OffsetInChunk minus
-// this one's, with UncompressedLen closing the last), then projects the
-// result back into per-topic length slices that align with each topic's
-// MessageIndexes.
-func buildChunkCache(ic *format.IndexChunk) *chunkCache {
-	type item struct {
-		topicId uint16
-		offset  int64
-		idx     int
-	}
-	total := 0
+// buildChunkCache derives per-message lengths for every topic in a decoded
+// index chunk. It reuses sortAndFilter as a pure offset-order k-way merge
+// (all topics kept, unbounded timestamp range, no video snap-back): this
+// exploits each topic's already-sorted MessageIndexes via a heap instead of a
+// full O(N log N) sort, and computes lengths from successive offset deltas
+// (UncompressedLen closing the last). The flat lengths are then projected back
+// onto each topic's MessageIndexes through a per-topic cursor.
+func (e *sampleEngine) buildChunkCache(ic *format.IndexChunk) *chunkCache {
+	allTopics := make(map[uint16]struct{}, len(ic.TopicIndexes))
 	for _, ti := range ic.TopicIndexes {
-		total += len(ti.MessageIndexes)
+		allTopics[ti.Id] = struct{}{}
 	}
-	items := make([]item, 0, total)
-	for _, ti := range ic.TopicIndexes {
-		for i, mi := range ti.MessageIndexes {
-			items = append(items, item{topicId: ti.Id, offset: mi.OffsetInChunk, idx: i})
-		}
-	}
-	sort.Slice(items, func(i, j int) bool { return items[i].offset < items[j].offset })
+	sortAndFilter(ic.TopicIndexes, ic.UncompressedLen, allTopics,
+		math.MinInt64, math.MaxInt64, false, e.mergeScratch, &e.sfMsgs, &e.sfLens)
 
 	perTopicLens := make(map[uint16][]int64, len(ic.TopicIndexes))
 	for _, ti := range ic.TopicIndexes {
 		perTopicLens[ti.Id] = make([]int64, len(ti.MessageIndexes))
 	}
-	for i := 0; i < len(items)-1; i++ {
-		perTopicLens[items[i].topicId][items[i].idx] = items[i+1].offset - items[i].offset
-	}
-	if len(items) > 0 {
-		last := items[len(items)-1]
-		perTopicLens[last.topicId][last.idx] = ic.UncompressedLen - last.offset
+	// e.sfMsgs is globally offset-sorted; within a single topic it preserves
+	// MessageIndexes order, so a per-topic cursor re-aligns each length.
+	cursor := make(map[uint16]int, len(ic.TopicIndexes))
+	for i, m := range e.sfMsgs {
+		perTopicLens[m.topicId][cursor[m.topicId]] = e.sfLens[i]
+		cursor[m.topicId]++
 	}
 	return &chunkCache{ic: ic, perTopicLens: perTopicLens}
 }
