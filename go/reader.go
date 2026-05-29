@@ -2,6 +2,7 @@ package turbodata
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 
@@ -22,6 +23,9 @@ type Reader struct {
 // NewReader creates a Reader backed by rs. No I/O is performed; the footer
 // and summary are loaded lazily on the first call to Summary or ReadMessages.
 func NewReader(rs ReadSource) (*Reader, error) {
+	if rs == nil {
+		return nil, ErrNilReadSource
+	}
 	return &Reader{rs: rs}, nil
 }
 
@@ -67,7 +71,7 @@ func (r *Reader) summaryWithHint(prefetch int64) (*format.Summary, error) {
 	}
 
 	tail := make([]byte, prefetch)
-	if _, err := r.rs.ReadAt(tail, r.size-prefetch); err != nil && err != io.EOF {
+	if _, err := r.rs.ReadAt(tail, r.size-prefetch); err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
 

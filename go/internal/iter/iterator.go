@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"container/heap"
 	"context"
+	"errors"
 	"io"
 	"math"
 
@@ -65,7 +66,7 @@ func (it *MessageIterator) Prepare() error {
 	case TimeOrder:
 		it.heap = &MessageHeap{}
 	case ReverseTimeOrder:
-		it.heap = &ReverseMessageHeap{}
+		it.heap = &MessageHeap{reverse: true}
 	}
 	heap.Init(it.heap)
 
@@ -100,21 +101,27 @@ func (it *MessageIterator) Prepare() error {
 	}
 
 	for _, topicsInfo := range it.Summary.TopicsInfos {
-		for _, topicMetadata := range topicsInfo.TopicMetadatas {
-			if _, ok := topicNamesMap[topicMetadata.Name]; !ok {
-				continue
-			}
+		if !groupMatches(topicsInfo, topicNamesMap) {
+			continue
+		}
 
-			videoDecodable := it.VideoDecodable && isVideoTopicsInfo(topicsInfo)
-			topicsGroupIt := newTopicsGroupIterator(it, topicIds, topicsInfo, videoDecodable)
-			if topicsGroupIt != nil {
-				it.topicsGroupIterators = append(it.topicsGroupIterators, topicsGroupIt)
-			}
-
-			break
+		videoDecodable := it.VideoDecodable && isVideoTopicsInfo(topicsInfo)
+		topicsGroupIt := newTopicsGroupIterator(it, topicIds, topicsInfo, videoDecodable)
+		if topicsGroupIt != nil {
+			it.topicsGroupIterators = append(it.topicsGroupIterators, topicsGroupIt)
 		}
 	}
 	return nil
+}
+
+// groupMatches reports whether any topic in ti is in the requested name set.
+func groupMatches(ti *format.TopicsInfo, topicNames map[string]struct{}) bool {
+	for _, tm := range ti.TopicMetadatas {
+		if _, ok := topicNames[tm.Name]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // isVideoTopicsInfo reports whether the (single) topic in this group was
@@ -149,14 +156,7 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 	scoped := make([]*scopedGroup, 0)
 	for _, topicsInfo := range it.Summary.TopicsInfos {
 		// Skip groups that don't have any topic the caller cares about.
-		anyMatch := false
-		for _, tm := range topicsInfo.TopicMetadatas {
-			if _, ok := topicNamesMap[tm.Name]; ok {
-				anyMatch = true
-				break
-			}
-		}
-		if !anyMatch {
+		if !groupMatches(topicsInfo, topicNamesMap) {
 			continue
 		}
 
@@ -177,15 +177,7 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 				break
 			}
 			filteredInfos = append(filteredInfos, info)
-
-			// Length of this compressed index chunk: distance to next chunk, or wrap to first chunk for last.
-			var ln int64
-			if i < len(topicsInfo.IndexChunkInfoList)-1 {
-				ln = topicsInfo.IndexChunkInfoList[i+1].Offset - info.Offset
-			} else {
-				ln = topicsInfo.TotalLen - info.Offset + topicsInfo.IndexChunkInfoList[0].Offset
-			}
-			filteredLens = append(filteredLens, ln)
+			filteredLens = append(filteredLens, topicsInfo.IndexChunkLen(i))
 		}
 		if len(filteredInfos) == 0 {
 			continue
@@ -355,7 +347,7 @@ func (it *MessageIterator) NextInto(buf *buffer.ReusableBuffer) (int64, string, 
 		item.data = data
 		heap.Push(it.heap, item)
 	}
-	if err != io.EOF && err != nil {
+	if !errors.Is(err, io.EOF) && err != nil {
 		return 0, "", err
 	}
 
@@ -376,7 +368,7 @@ func (it *MessageIterator) initLoad() error {
 	}
 	for i := 0; i < groupCount; i++ {
 		timestamp, topicId, data, err := it.groupNext(i)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			continue
 		}
 		if err != nil {

@@ -208,6 +208,7 @@ func TestVideoGOPIntegrityChunkBoundary(t *testing.T) {
 // keyframe arrives at ts=110. With lastTimestamp-based semantics:
 //   - thresholdReached uses lastTimestamp=50; 50-0=50 < 100 -> no flush.
 //   - Keyframe joins the current chunk; still one chunk so far.
+//
 // With (incorrect) timestamp-based semantics:
 //   - thresholdReached would use 110; 110-0=110 >= 100 -> flush early.
 //   - Chunk would split even though the current chunk only spans 50.

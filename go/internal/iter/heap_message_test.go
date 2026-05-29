@@ -26,7 +26,7 @@ func TestMessageHeap(t *testing.T) {
 }
 
 func TestReverseMessageHeap(t *testing.T) {
-	h := &ReverseMessageHeap{}
+	h := &MessageHeap{reverse: true}
 	heap.Init(h)
 	heap.Push(h, &message{timestamp: 2})
 	heap.Push(h, &message{timestamp: 1})

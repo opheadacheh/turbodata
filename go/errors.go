@@ -3,6 +3,8 @@ package turbodata
 import "errors"
 
 var (
+	ErrNilReadSource = errors.New("read source is nil")
+
 	ErrTopicAlreadyOpen       = errors.New("topic already open")
 	ErrNamesMetadatasMismatch = errors.New("names and metadatas length mismatch")
 	ErrNoTopicsToOpen         = errors.New("no topics to open")

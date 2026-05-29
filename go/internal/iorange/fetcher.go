@@ -2,6 +2,7 @@ package iorange
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -65,7 +66,7 @@ func (f *Fetcher) Execute(ctx context.Context, ops []ReadOp) ([][]byte, error) {
 			defer wg.Done()
 			defer func() { <-tokens }()
 			n, err := f.rr.ReadAt(bufs[idx], op.Offset)
-			if err != nil && !(err == io.EOF && int64(n) == op.Length) {
+			if err != nil && !(errors.Is(err, io.EOF) && int64(n) == op.Length) {
 				setErr(fmt.Errorf("read op %d at offset %d length %d: %w", idx, op.Offset, op.Length, err))
 				cancel()
 				return

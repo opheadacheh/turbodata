@@ -61,11 +61,7 @@ func newTopicsGroupIterator(it *MessageIterator, topicIds map[uint16]struct{}, t
 		}
 
 		indexChunkInfoList = append(indexChunkInfoList, indexChunkInfo)
-		if i < len(topicsInfo.IndexChunkInfoList)-1 {
-			indexChunkInfoLens = append(indexChunkInfoLens, topicsInfo.IndexChunkInfoList[i+1].Offset-indexChunkInfo.Offset)
-		} else {
-			indexChunkInfoLens = append(indexChunkInfoLens, topicsInfo.TotalLen-indexChunkInfo.Offset+topicsInfo.IndexChunkInfoList[0].Offset)
-		}
+		indexChunkInfoLens = append(indexChunkInfoLens, topicsInfo.IndexChunkLen(i))
 	}
 
 	isCompressed, ok := topicsInfo.TopicMetadatas[0].Metadata["is_compressed"].(bool)

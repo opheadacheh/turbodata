@@ -336,13 +336,13 @@ func (w *Writer) CloseTopic() error {
 }
 
 func (w *Writer) writeChunk() error {
-	var bytes []byte
+	var chunkBytes []byte
 	uncompressedLen := int64(w.buf.Len())
 	if w.writerConfig.isCompressed {
 		compress.CompressInto(w.buf.Bytes(), w.compressBuf)
-		bytes = w.compressBuf.Data
+		chunkBytes = w.compressBuf.Data
 	} else {
-		bytes = w.buf.Bytes()
+		chunkBytes = w.buf.Bytes()
 	}
 
 	topicIndexes := make([]*format.TopicIndex, 0, len(w.writerConfig.topicIds))
@@ -370,16 +370,16 @@ func (w *Writer) writeChunk() error {
 	w.indexChunks = append(w.indexChunks, &format.IndexChunk{
 		TopicIndexes:    topicIndexes,
 		ChunkOffset:     w.offset,
-		ChunkLen:        int64(len(bytes)),
+		ChunkLen:        int64(len(chunkBytes)),
 		UncompressedLen: uncompressedLen,
 	})
 
-	n, err := w.w.Write(bytes)
+	n, err := w.w.Write(chunkBytes)
 	if err != nil {
 		return err
 	}
-	if n != len(bytes) {
-		return fmt.Errorf("wrote %d bytes, expected %d", n, len(bytes))
+	if n != len(chunkBytes) {
+		return fmt.Errorf("wrote %d bytes, expected %d", n, len(chunkBytes))
 	}
 	w.offset += int64(n)
 

@@ -2,10 +2,11 @@ package iter
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 
 	"turbodata/format"
 	"turbodata/internal/buffer"
@@ -278,16 +279,10 @@ func (e *sampleEngine) gatherChunkNeeds() []chunkNeed {
 			seen[k] = struct{}{}
 			ti := e.summary.TopicsInfos[k.group]
 			info := ti.IndexChunkInfoList[k.chunk]
-			var ln int64
-			if k.chunk < len(ti.IndexChunkInfoList)-1 {
-				ln = ti.IndexChunkInfoList[k.chunk+1].Offset - info.Offset
-			} else {
-				ln = ti.TotalLen - info.Offset + ti.IndexChunkInfoList[0].Offset
-			}
-			needs = append(needs, chunkNeed{key: k, offset: info.Offset, length: ln})
+			needs = append(needs, chunkNeed{key: k, offset: info.Offset, length: ti.IndexChunkLen(k.chunk)})
 		}
 	}
-	sort.Slice(needs, func(i, j int) bool { return needs[i].offset < needs[j].offset })
+	slices.SortFunc(needs, func(a, b chunkNeed) int { return cmp.Compare(a.offset, b.offset) })
 	return needs
 }
 
@@ -524,7 +519,7 @@ func (e *sampleEngine) runPhaseB() error {
 	if len(ranges) == 0 {
 		return nil
 	}
-	sort.Slice(ranges, func(i, j int) bool { return ranges[i].Offset < ranges[j].Offset })
+	slices.SortFunc(ranges, func(a, b iorange.Range) int { return cmp.Compare(a.Offset, b.Offset) })
 
 	ops, locs := iorange.Plan(ranges, e.strategy.CoalesceGap, e.strategy.SplitThreshold)
 	bufs, err := e.fetcher.Execute(e.ctx, ops)
@@ -601,7 +596,7 @@ func (e *sampleEngine) materializeVideo(qs *queryState, loaded *iorange.LoadedBy
 	// the caller's expectation.
 	resolved := make([]resolvedItem, len(qs.resolved))
 	copy(resolved, qs.resolved)
-	sort.Slice(resolved, func(i, j int) bool { return resolved[i].tIdx < resolved[j].tIdx })
+	slices.SortFunc(resolved, func(a, b resolvedItem) int { return cmp.Compare(a.tIdx, b.tIdx) })
 
 	// Decoder state continuity is per-row, scoped to a single GOP (= same
 	// chunkKey + same keyframeMsgIdx). Track the previous found item's GOP

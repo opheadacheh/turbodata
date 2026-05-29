@@ -33,7 +33,8 @@ func writeString(w io.Writer, s string) error {
 		return err
 	}
 
-	return binary.Write(w, binary.BigEndian, strBytes)
+	_, err := w.Write(strBytes)
+	return err
 }
 
 const maxMapLen = 64 * 1024 * 1024 // 64 MiB
@@ -71,7 +72,8 @@ func writeMap(w io.Writer, m map[string]any) error {
 		return err
 	}
 
-	return binary.Write(w, binary.BigEndian, bytes)
+	_, err = w.Write(bytes)
+	return err
 }
 
 func ReadFooter(r io.Reader) (*Footer, error) {
@@ -217,12 +219,19 @@ func WriteSummary(w io.Writer, summary *Summary) error {
 	return nil
 }
 
+// messageIndexSize is the on-disk size of a MessageIndex: int64 Timestamp +
+// int64 OffsetInChunk.
+const messageIndexSize = 16
+
 func ReadMessageIndex(r io.Reader) (*MessageIndex, error) {
-	messageIndex := &MessageIndex{}
-	if err := binary.Read(r, binary.BigEndian, messageIndex); err != nil {
+	var buf [messageIndexSize]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
 		return nil, err
 	}
-	return messageIndex, nil
+	return &MessageIndex{
+		Timestamp:     int64(binary.BigEndian.Uint64(buf[0:8])),
+		OffsetInChunk: int64(binary.BigEndian.Uint64(buf[8:16])),
+	}, nil
 }
 
 func WriteMessageIndex(w io.Writer, messageIndex *MessageIndex) error {
@@ -243,11 +252,16 @@ func ReadTopicIndex(r io.Reader) (*TopicIndex, error) {
 		return nil, err
 	}
 
-	var err error
+	miBuf := make([]byte, int(messageIndexLen)*messageIndexSize)
+	if _, err := io.ReadFull(r, miBuf); err != nil {
+		return nil, err
+	}
 	topicIndex.MessageIndexes = make([]*MessageIndex, messageIndexLen)
 	for i := 0; i < int(messageIndexLen); i++ {
-		if topicIndex.MessageIndexes[i], err = ReadMessageIndex(r); err != nil {
-			return nil, err
+		off := i * messageIndexSize
+		topicIndex.MessageIndexes[i] = &MessageIndex{
+			Timestamp:     int64(binary.BigEndian.Uint64(miBuf[off : off+8])),
+			OffsetInChunk: int64(binary.BigEndian.Uint64(miBuf[off+8 : off+16])),
 		}
 	}
 

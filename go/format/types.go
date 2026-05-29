@@ -21,6 +21,17 @@ type TopicsInfo struct {
 	TotalLen           int64
 }
 
+// IndexChunkLen returns the on-disk byte length of the i-th index chunk: the
+// distance to the next chunk's offset, or for the last chunk the distance that
+// wraps around via TotalLen to the first chunk's offset.
+func (ti *TopicsInfo) IndexChunkLen(i int) int64 {
+	info := ti.IndexChunkInfoList[i]
+	if i < len(ti.IndexChunkInfoList)-1 {
+		return ti.IndexChunkInfoList[i+1].Offset - info.Offset
+	}
+	return ti.TotalLen - info.Offset + ti.IndexChunkInfoList[0].Offset
+}
+
 type TopicMetadata struct {
 	Id       uint16
 	Name     string

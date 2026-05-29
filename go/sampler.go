@@ -127,8 +127,11 @@ func WithSampleVideoDecodable() SampleOption {
 //	// 10 samples at 10 Hz starting at T:
 //	ts := turbodata.LinSpaceTimestamps(T, int64(100*time.Millisecond), 10)
 //
-// Returns nil when count <= 0. Panics when stride <= 0 (the strict-increasing
-// contract on SampleQuery.Timestamps requires positive strides).
+// Returns nil when count <= 0.
+//
+// A stride <= 0 is a programmer-error precondition violation: it would break
+// the strict-increasing contract on SampleQuery.Timestamps, so this panics
+// rather than return a silently invalid slice. Callers must pass stride > 0.
 func LinSpaceTimestamps(start, stride int64, count int) []int64 {
 	if count <= 0 {
 		return nil

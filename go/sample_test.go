@@ -274,10 +274,10 @@ func TestSampleValidationAggregatesAllViolations(t *testing.T) {
 	before := tracking.readAtCalls.Load()
 
 	queries := []SampleQuery{
-		{Topic: "ghost", Timestamps: []int64{10}},      // unknown topic
-		{Topic: "a", Timestamps: []int64{30, 20}},      // not strictly increasing
-		{Topic: "a", Timestamps: []int64{40}},          // duplicate topic
-		{Topic: "b", Timestamps: []int64{10, 10, 20}},  // duplicate (== not strict)
+		{Topic: "ghost", Timestamps: []int64{10}},     // unknown topic
+		{Topic: "a", Timestamps: []int64{30, 20}},     // not strictly increasing
+		{Topic: "a", Timestamps: []int64{40}},         // duplicate topic
+		{Topic: "b", Timestamps: []int64{10, 10, 20}}, // duplicate (== not strict)
 	}
 	_, err := r.Sample(queries)
 	if err == nil {
