@@ -34,6 +34,7 @@ type SampleHit struct {
 	Found        bool
 	Timestamp    int64
 	Data         []byte
+	IsVideo      bool
 	Frames       []SampleFrame
 	ResetDecoder bool
 }
@@ -50,11 +51,11 @@ type SampleFrame struct {
 // Sample resolves floor messages for the given specs in two concurrent I/O
 // waves and returns hits in the same shape as the input: out[i][j]
 // corresponds to specs[i].Timestamps[j].
-func Sample(rs ReadSource, summary *format.Summary, specs []SampleSpec, strategy readstrategy.ReadStrategy) ([][]SampleHit, error) {
+func Sample(rs ReadSource, summary *format.Summary, specs []SampleSpec, strategy readstrategy.ReadStrategy, videoDecodable bool) ([][]SampleHit, error) {
 	if len(specs) == 0 {
 		return nil, nil
 	}
-	e := newSampleEngine(rs, summary, specs, strategy)
+	e := newSampleEngine(rs, summary, specs, strategy, videoDecodable)
 	e.assignInitialCandidates()
 	if err := e.runPhaseA(); err != nil {
 		return nil, err
@@ -117,18 +118,20 @@ type sampleEngine struct {
 	fetcher  *iorange.Fetcher
 	ctx      context.Context
 
-	queryStates []*queryState
-	chunks      map[chunkKey]*chunkCache // decoded across all Phase A waves
+	queryStates    []*queryState
+	chunks         map[chunkKey]*chunkCache // decoded across all Phase A waves
+	videoDecodable bool                     // gates GOP-prefix treatment of video topics
 }
 
-func newSampleEngine(rs ReadSource, summary *format.Summary, specs []SampleSpec, strategy readstrategy.ReadStrategy) *sampleEngine {
+func newSampleEngine(rs ReadSource, summary *format.Summary, specs []SampleSpec, strategy readstrategy.ReadStrategy, videoDecodable bool) *sampleEngine {
 	e := &sampleEngine{
-		rs:       rs,
-		summary:  summary,
-		strategy: strategy,
-		fetcher:  iorange.NewFetcher(rs, strategy.MaxConcurrency),
-		ctx:      context.Background(),
-		chunks:   make(map[chunkKey]*chunkCache),
+		rs:             rs,
+		summary:        summary,
+		strategy:       strategy,
+		fetcher:        iorange.NewFetcher(rs, strategy.MaxConcurrency),
+		ctx:            context.Background(),
+		chunks:         make(map[chunkKey]*chunkCache),
+		videoDecodable: videoDecodable,
 	}
 	e.queryStates = make([]*queryState, len(specs))
 	for i, spec := range specs {
@@ -137,6 +140,10 @@ func newSampleEngine(rs ReadSource, summary *format.Summary, specs []SampleSpec,
 			results: make([]SampleHit, len(spec.Timestamps)),
 		}
 		e.resolveTopic(qs)
+		// Video decoding is opt-in. Without it, a video topic is sampled like
+		// any other topic (its floor frame is returned in Data), so clear the
+		// flag that drives the GOP-prefix path.
+		qs.isVideo = qs.isVideo && e.videoDecodable
 		e.queryStates[i] = qs
 	}
 	return e
@@ -214,10 +221,10 @@ func (e *sampleEngine) runPhaseA() error {
 			var stillPending []pendingItem
 			i := 0
 			for i < len(qs.pending) {
-				j := i
-				for j < len(qs.pending) && qs.pending[j].chunkIdx == qs.pending[i].chunkIdx {
-					j++
-				}
+			j := i + 1
+			for j < len(qs.pending) && qs.pending[j].chunkIdx == qs.pending[i].chunkIdx {
+				j++
+			}
 				c := qs.pending[i].chunkIdx
 				cache, ok := e.chunks[chunkKey{qs.groupIdx, c}]
 				if !ok {
@@ -440,12 +447,13 @@ func countPending(states []*queryState) int {
 // coalesce adjacent prefixes and the materialization step can build
 // incremental Frames slices keyed off the prefix boundaries.
 func (e *sampleEngine) runPhaseB() error {
-	type planEntry struct {
-		key    chunkKey
-		offset int64
-		length int64
-	}
 	seenChunk := make(map[chunkKey]struct{})
+	// Uncompressed non-video: dedupe per absolute message offset. Multiple
+	// query timestamps in one spec can floor to the same message; without
+	// this each would register an identical Range, and iorange.Plan turns
+	// exact duplicates into separate (negative-gap) ops, i.e. redundant
+	// reads of the same bytes. The offset is globally unique per message.
+	seenMsg := make(map[int64]struct{})
 
 	// Video: dedupe per (chunk, keyframe). All queries that share a GOP
 	// register a single range from the keyframe to the FURTHEST target
@@ -462,7 +470,7 @@ func (e *sampleEngine) runPhaseB() error {
 	}
 	videoExtents := make(map[videoKey]*videoExtent)
 
-	var entries []planEntry
+	var ranges []iorange.Range
 	for _, qs := range e.queryStates {
 		for _, r := range qs.resolved {
 			ic := e.chunks[r.chunkKey].ic
@@ -472,10 +480,13 @@ func (e *sampleEngine) runPhaseB() error {
 					continue
 				}
 				seenChunk[r.chunkKey] = struct{}{}
-				entries = append(entries, planEntry{key: r.chunkKey, offset: ic.ChunkOffset, length: ic.ChunkLen})
+				ranges = append(ranges, iorange.Range{Offset: ic.ChunkOffset, Length: ic.ChunkLen})
 			case qs.isVideo:
 				cc := e.chunks[r.chunkKey]
-				ti := findTopicIndex(cc.ic, qs.topicId)
+				// Video groups are single-topic by writer invariant
+				// (ErrVideoGroupMustBeSingleTopic), so the sole topic index
+				// is TopicIndexes[0].
+				ti := cc.ic.TopicIndexes[0]
 				mis := ti.MessageIndexes
 				lens := cc.perTopicLens[qs.topicId]
 				start := mis[r.keyframeMsgIdx].OffsetInChunk
@@ -493,27 +504,27 @@ func (e *sampleEngine) runPhaseB() error {
 					}
 				}
 			default:
-				entries = append(entries, planEntry{key: r.chunkKey, offset: ic.ChunkOffset + r.msgOffInChunk, length: r.msgLen})
+				off := ic.ChunkOffset + r.msgOffInChunk
+				if _, dup := seenMsg[off]; dup {
+					continue
+				}
+				seenMsg[off] = struct{}{}
+				ranges = append(ranges, iorange.Range{Offset: off, Length: r.msgLen})
 			}
 		}
 	}
 	for vk, ve := range videoExtents {
 		ic := e.chunks[vk.chunkKey].ic
-		entries = append(entries, planEntry{
-			key:    vk.chunkKey,
-			offset: ic.ChunkOffset + ve.startInChunk,
-			length: ve.endInChunkExcl - ve.startInChunk,
+		ranges = append(ranges, iorange.Range{
+			Offset: ic.ChunkOffset + ve.startInChunk,
+			Length: ve.endInChunkExcl - ve.startInChunk,
 		})
 	}
-	if len(entries) == 0 {
+	if len(ranges) == 0 {
 		return nil
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].offset < entries[j].offset })
+	sort.Slice(ranges, func(i, j int) bool { return ranges[i].Offset < ranges[j].Offset })
 
-	ranges := make([]iorange.Range, len(entries))
-	for i, pe := range entries {
-		ranges[i] = iorange.Range{Offset: pe.offset, Length: pe.length}
-	}
 	ops, locs := iorange.Plan(ranges, e.strategy.CoalesceGap, e.strategy.SplitThreshold)
 	bufs, err := e.fetcher.Execute(e.ctx, ops)
 	if err != nil {
@@ -599,28 +610,17 @@ func (e *sampleEngine) materializeVideo(qs *queryState, loaded *iorange.LoadedBy
 		prevChunk        chunkKey
 		prevKeyframeIdx  int
 		prevTargetMsgIdx int
-		prevTargetTIdx   int
 	)
 
 	for _, r := range resolved {
 		cc := e.chunks[r.chunkKey]
 		ic := cc.ic
-		ti := findTopicIndex(ic, qs.topicId)
+		// Video groups are single-topic by writer invariant
+		// (ErrVideoGroupMustBeSingleTopic), so the sole topic index is
+		// TopicIndexes[0].
+		ti := ic.TopicIndexes[0]
 		mis := ti.MessageIndexes
 		lens := cc.perTopicLens[qs.topicId]
-
-		// Reusable lookup of whether a per-topic message index is a key frame.
-		isKey := func(msgIdx int) bool {
-			for _, kf := range ti.KeyFrameIndexes {
-				if int(kf) == msgIdx {
-					return true
-				}
-				if int(kf) > msgIdx {
-					return false
-				}
-			}
-			return false
-		}
 
 		// Same GOP as previous resolved item in this row?
 		sameGOP := havePrev && prevChunk == r.chunkKey && prevKeyframeIdx == r.keyframeMsgIdx
@@ -653,21 +653,22 @@ func (e *sampleEngine) materializeVideo(qs *queryState, loaded *iorange.LoadedBy
 				data := make([]byte, frameLen)
 				copy(data, raw[frameStart:frameStart+frameLen])
 				frames = append(frames, SampleFrame{
-					Timestamp:  mis[i].Timestamp,
-					IsKeyFrame: isKey(i),
+					Timestamp: mis[i].Timestamp,
+					// keyframeMsgIdx is the greatest key frame index <=
+					// targetMsgIdx, so within [keyframeMsgIdx..targetMsgIdx]
+					// it is the only key frame.
+					IsKeyFrame: i == r.keyframeMsgIdx,
 					Data:       data,
 				})
 			}
-			// Caller-visible Data/Timestamp track the target frame (the last
-			// new frame in this incremental slice, by construction).
-			tgt := &frames[len(frames)-1]
-			qs.results[r.tIdx].Data = tgt.Data
-			qs.results[r.tIdx].Timestamp = tgt.Timestamp
+			// Data stays nil for video: the bytes live in Frames, whose last
+			// element is the target. Timestamp names that target frame (the
+			// last new frame in this incremental slice, by construction).
+			qs.results[r.tIdx].Timestamp = frames[len(frames)-1].Timestamp
 		} else {
 			// Empty Frames: the target was already emitted by the previous
-			// in-row result. Reuse that result's Data so this row's caller
-			// can read .Data without checking Frames at all.
-			qs.results[r.tIdx].Data = qs.results[prevTargetTIdx].Data
+			// in-row result (same target frame). Data stays nil; Timestamp
+			// still names the target so the caller knows which frame it is.
 			qs.results[r.tIdx].Timestamp = mis[r.targetMsgIdx].Timestamp
 		}
 		qs.results[r.tIdx].Found = true
@@ -678,13 +679,17 @@ func (e *sampleEngine) materializeVideo(qs *queryState, loaded *iorange.LoadedBy
 		prevChunk = r.chunkKey
 		prevKeyframeIdx = r.keyframeMsgIdx
 		prevTargetMsgIdx = r.targetMsgIdx
-		prevTargetTIdx = r.tIdx
 	}
 }
 
 func (e *sampleEngine) collect() [][]SampleHit {
 	out := make([][]SampleHit, len(e.queryStates))
 	for i, qs := range e.queryStates {
+		if qs.isVideo {
+			for j := range qs.results {
+				qs.results[j].IsVideo = true
+			}
+		}
 		out[i] = qs.results
 	}
 	return out

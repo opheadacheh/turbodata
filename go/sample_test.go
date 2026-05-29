@@ -134,6 +134,49 @@ func TestSampleSameChunkBatching(t *testing.T) {
 	}
 }
 
+// TestSampleDuplicateFloorDedupesReads samples several timestamps that all
+// floor to the SAME uncompressed message. The duplicate floors must collapse
+// to a single data read: identical ranges have a negative gap and never
+// coalesce, so without the per-message dedup in runPhaseB the fetcher would
+// issue one ReadAt per duplicate. Asserting on the read count (not just the
+// results) is what proves the dedup is actually in effect.
+func TestSampleDuplicateFloorDedupesReads(t *testing.T) {
+	const dupCount = 5
+	r, tracking := buildSampleReader(t, func(w *Writer) {
+		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}})
+		mustWriteMessage(t, w, "cam", []byte("f100"), 100)
+		mustWriteMessage(t, w, "cam", []byte("f200"), 200)
+		mustWriteMessage(t, w, "cam", []byte("f300"), 300)
+		mustCloseTopic(t, w)
+		mustClose(t, w)
+	})
+	if _, err := r.Summary(); err != nil {
+		t.Fatalf("Summary: %v", err)
+	}
+	before := tracking.readAtCalls.Load()
+
+	// 101..105 all floor to the single message at ts=100.
+	out, err := r.Sample([]SampleQuery{
+		{Topic: "cam", Timestamps: []int64{101, 102, 103, 104, 105}},
+	})
+	if err != nil {
+		t.Fatalf("Sample: %v", err)
+	}
+	want := make([]SampleResult, dupCount)
+	for i := range want {
+		want[i] = SampleResult{Found: true, Timestamp: 100, Data: []byte("f100")}
+	}
+	assertResultsEqual(t, out[0], want)
+
+	diff := tracking.readAtCalls.Load() - before
+	// Phase A reads the single index chunk (1 op); Phase B reads the single
+	// floored message (1 op after dedup). Without dedup, Phase B would issue
+	// dupCount separate reads of identical bytes -> 1 + dupCount total.
+	if diff != 2 {
+		t.Errorf("expected 2 ReadAt calls (1 index + 1 deduped data); got %d (no-dedup would be %d)", diff, 1+dupCount)
+	}
+}
+
 // TestSampleMixedCompressedUncompressed exercises cross-group sampling with
 // one compressed and one uncompressed group, asserting both Phase B
 // granularities work end-to-end.

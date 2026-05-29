@@ -284,7 +284,7 @@ func TestSampleVideoSingleQueryReturnsGOPPrefix(t *testing.T) {
 		mustClose(t, w)
 	})
 
-	out, err := r.Sample([]SampleQuery{{Topic: "cam", Timestamps: []int64{30}}})
+	out, err := r.Sample([]SampleQuery{{Topic: "cam", Timestamps: []int64{30}}}, WithSampleVideoDecodable())
 	if err != nil {
 		t.Fatalf("Sample: %v", err)
 	}
@@ -296,13 +296,23 @@ func TestSampleVideoSingleQueryReturnsGOPPrefix(t *testing.T) {
 	if !res.Found {
 		t.Fatal("Found=false; want true")
 	}
+	if !res.IsVideo {
+		t.Error("expected IsVideo=true under WithSampleVideoDecodable")
+	}
 	if !res.ResetDecoder {
 		t.Error("expected ResetDecoder=true for first row result")
 	}
 	wantFrames := []frame{frames[0], frames[1], frames[2]}
 	assertFramesMatch(t, res.Frames, wantFrames)
-	if string(res.Data) != "P30" || res.Timestamp != 30 {
-		t.Errorf("target frame Data/Timestamp wrong: got data=%q ts=%d", res.Data, res.Timestamp)
+	// Data is nil for video; the target is the last element of Frames.
+	if res.Data != nil {
+		t.Errorf("video Data should be nil (bytes live in Frames); got %q", res.Data)
+	}
+	if res.Timestamp != 30 {
+		t.Errorf("target Timestamp wrong: got %d want 30", res.Timestamp)
+	}
+	if got := string(res.Frames[len(res.Frames)-1].Data); got != "P30" {
+		t.Errorf("target frame (Frames last) = %q, want P30", got)
 	}
 }
 
@@ -319,7 +329,7 @@ func TestSampleVideoQueryOnKeyFrame(t *testing.T) {
 		mustCloseTopic(t, w)
 		mustClose(t, w)
 	})
-	out, err := r.Sample([]SampleQuery{{Topic: "cam", Timestamps: []int64{10}}})
+	out, err := r.Sample([]SampleQuery{{Topic: "cam", Timestamps: []int64{10}}}, WithSampleVideoDecodable())
 	if err != nil {
 		t.Fatalf("Sample: %v", err)
 	}
@@ -355,7 +365,7 @@ func TestSampleVideoIncrementalSameGOP(t *testing.T) {
 	})
 
 	// Three queries: 25 (-> P1), 45 (-> P3), 60 (-> P5). All same GOP.
-	out, err := r.Sample([]SampleQuery{{Topic: "cam", Timestamps: []int64{25, 45, 60}}})
+	out, err := r.Sample([]SampleQuery{{Topic: "cam", Timestamps: []int64{25, 45, 60}}}, WithSampleVideoDecodable())
 	if err != nil {
 		t.Fatalf("Sample: %v", err)
 	}
@@ -427,7 +437,7 @@ func TestSampleVideoSpanningTwoGOPs(t *testing.T) {
 	})
 
 	// Two queries: 25 (-> A1 in GOP A), 55 (-> B1 in GOP B).
-	out, err := r.Sample([]SampleQuery{{Topic: "cam", Timestamps: []int64{25, 55}}})
+	out, err := r.Sample([]SampleQuery{{Topic: "cam", Timestamps: []int64{25, 55}}}, WithSampleVideoDecodable())
 	if err != nil {
 		t.Fatalf("Sample: %v", err)
 	}
@@ -462,7 +472,7 @@ func TestSampleVideoTwoQueriesSameTarget(t *testing.T) {
 		mustClose(t, w)
 	})
 	// 21 and 22 both floor to P1 (ts=20).
-	out, err := r.Sample([]SampleQuery{{Topic: "cam", Timestamps: []int64{21, 22}}})
+	out, err := r.Sample([]SampleQuery{{Topic: "cam", Timestamps: []int64{21, 22}}}, WithSampleVideoDecodable())
 	if err != nil {
 		t.Fatalf("Sample: %v", err)
 	}
@@ -473,16 +483,27 @@ func TestSampleVideoTwoQueriesSameTarget(t *testing.T) {
 		t.Errorf("row[0]: want Reset+len(Frames)=2; got Reset=%v len=%d", row[0].ResetDecoder, len(row[0].Frames))
 	}
 
-	// Second: same target frame. Frames is empty (nothing new to feed),
-	// ResetDecoder=false, but Data/Timestamp still describe the target.
+	// Second: same target frame. Frames is empty (nothing new to feed) and
+	// ResetDecoder=false. Data is nil for video, but Timestamp still names
+	// the target; its bytes were emitted by row[0] (Frames last element).
 	if row[1].ResetDecoder {
 		t.Error("row[1].ResetDecoder should be false")
+	}
+	if !row[1].IsVideo {
+		t.Error("row[1].IsVideo should be true under WithSampleVideoDecodable")
 	}
 	if len(row[1].Frames) != 0 {
 		t.Errorf("row[1].Frames should be empty (same target), got %d", len(row[1].Frames))
 	}
-	if string(row[1].Data) != "P1" || row[1].Timestamp != 20 {
-		t.Errorf("row[1] target mismatch: Data=%q Ts=%d", row[1].Data, row[1].Timestamp)
+	if row[1].Data != nil {
+		t.Errorf("row[1].Data should be nil for video; got %q", row[1].Data)
+	}
+	if row[1].Timestamp != 20 {
+		t.Errorf("row[1] target Timestamp = %d, want 20", row[1].Timestamp)
+	}
+	// The target bytes for row[1] are the last frame emitted by row[0].
+	if got := string(row[0].Frames[len(row[0].Frames)-1].Data); got != "P1" {
+		t.Errorf("row[0] last frame = %q, want P1 (row[1]'s target)", got)
 	}
 }
 
@@ -499,12 +520,55 @@ func TestSampleVideoBeforeFirstKeyFrame(t *testing.T) {
 		mustCloseTopic(t, w)
 		mustClose(t, w)
 	})
-	out, err := r.Sample([]SampleQuery{{Topic: "cam", Timestamps: []int64{5}}})
+	out, err := r.Sample([]SampleQuery{{Topic: "cam", Timestamps: []int64{5}}}, WithSampleVideoDecodable())
 	if err != nil {
 		t.Fatalf("Sample: %v", err)
 	}
 	if out[0][0].Found {
 		t.Error("expected Found=false for T < first key frame")
+	}
+}
+
+// ---- Sample: video topic WITHOUT the decodable option -------------------
+
+// TestSampleVideoWithoutDecodableOption verifies the opt-in boundary: when
+// WithSampleVideoDecodable is NOT passed, a video topic behaves like any
+// other topic. Each result returns its single floor frame in Data, IsVideo
+// is false, and no GOP machinery (Frames/ResetDecoder) is engaged - even for
+// a query that lands mid-GOP (ts=30 -> P2), which would be undecodable alone.
+func TestSampleVideoWithoutDecodableOption(t *testing.T) {
+	frames := []frame{
+		{ts: 10, isKeyFrame: true, data: []byte("K")},
+		{ts: 20, isKeyFrame: false, data: []byte("P1")},
+		{ts: 30, isKeyFrame: false, data: []byte("P2")},
+	}
+	r, _ := buildSampleReader(t, func(w *Writer) {
+		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic())
+		writeVideo(t, w, "cam", frames)
+		mustCloseTopic(t, w)
+		mustClose(t, w)
+	})
+	// No WithSampleVideoDecodable: plain floor semantics.
+	out, err := r.Sample([]SampleQuery{{Topic: "cam", Timestamps: []int64{10, 30}}})
+	if err != nil {
+		t.Fatalf("Sample: %v", err)
+	}
+	row := out[0]
+	wantData := []string{"K", "P2"}
+	wantTs := []int64{10, 30}
+	for i, res := range row {
+		if !res.Found {
+			t.Errorf("[%d] Found=false; want true", i)
+		}
+		if res.IsVideo {
+			t.Errorf("[%d] IsVideo should be false without WithSampleVideoDecodable", i)
+		}
+		if res.Frames != nil || res.ResetDecoder {
+			t.Errorf("[%d] no GOP machinery expected: Frames=%v Reset=%v", i, res.Frames, res.ResetDecoder)
+		}
+		if string(res.Data) != wantData[i] || res.Timestamp != wantTs[i] {
+			t.Errorf("[%d] floor frame: got Data=%q ts=%d, want %q ts=%d", i, res.Data, res.Timestamp, wantData[i], wantTs[i])
+		}
 	}
 }
 

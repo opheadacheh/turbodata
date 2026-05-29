@@ -20,12 +20,20 @@ type SampleQuery struct {
 // SampleResult is one returned message. Out[i][j] from Reader.Sample
 // corresponds to queries[i].Timestamps[j]. Found is false when there is no
 // message with timestamp <= Timestamps[j] for the topic (e.g. T precedes the
-// topic's first message). Data is an owned copy and is safe to retain after
-// the call returns.
+// topic's first message).
 //
-// Video topics (opened with WithVideoTopic) also populate Frames and
-// ResetDecoder. The conventions, within a single Out[i] row (one topic,
+// Video decoding is opt-in via WithSampleVideoDecodable. Without that option
+// every topic - including video topics - returns its floor message in Data
+// (an owned copy, safe to retain), IsVideo is false, and Frames/ResetDecoder
+// are unset. This is the right mode when you only want the bytes at time T.
+//
+// With WithSampleVideoDecodable, results for video topics (opened with
+// WithVideoTopic) instead carry a decoder-ready GOP sequence and set
+// IsVideo = true. For those results, within a single Out[i] row (one topic,
 // strictly increasing query timestamps):
+//
+//   - Data is nil; the frame bytes live in Frames and the target frame is
+//     the last element of Frames. Timestamp names that target frame.
 //
 //   - For the first found result in each GOP encountered in the row:
 //     ResetDecoder = true, Frames = [keyframe ... target] in storage
@@ -34,21 +42,21 @@ type SampleQuery struct {
 //   - For subsequent found results within the same GOP: ResetDecoder =
 //     false, Frames = [previous_target+1 ... target] (only the new frames
 //     since the previous query in this row). Frames is empty when two
-//     queries resolve to the same target frame.
+//     queries resolve to the same target frame; Timestamp still names that
+//     target, whose bytes were emitted by the previous in-row result.
 //
-//   - Data and Timestamp always describe the target frame.
-//
-// Process results within a row in order to benefit from decoder-state
+// Process video results within a row in order to benefit from decoder-state
 // carry-over. Skipping or reordering forces the caller to find the nearest
 // preceding ResetDecoder=true entry and feed forward from there.
-//
-// For non-video topics, Frames is nil and ResetDecoder is false.
 type SampleResult struct {
 	Found     bool
 	Timestamp int64
 	Data      []byte
 
-	// Video-only.
+	// IsVideo is true only for results of a video topic produced under
+	// WithSampleVideoDecodable. When true, Data is nil and the frames are in
+	// Frames; when false, Frames and ResetDecoder are unset.
+	IsVideo      bool
 	Frames       []Frame
 	ResetDecoder bool
 }
@@ -76,8 +84,9 @@ var DefaultSampleStrategy = ReadStrategy{
 type SampleOption func(*sampleConfig) error
 
 type sampleConfig struct {
-	strategy     ReadStrategy
-	tailPrefetch int64
+	strategy       ReadStrategy
+	tailPrefetch   int64
+	videoDecodable bool
 }
 
 // WithSampleReadStrategy overrides DefaultSampleStrategy for this Sample call.
@@ -94,6 +103,20 @@ func WithSampleReadStrategy(s ReadStrategy) SampleOption {
 func WithSampleTailPrefetch(n int64) SampleOption {
 	return func(c *sampleConfig) error {
 		c.tailPrefetch = n
+		return nil
+	}
+}
+
+// WithSampleVideoDecodable makes Sample return a decoder-ready GOP sequence
+// for video topics (opened with WithVideoTopic): each result for a video
+// topic sets IsVideo=true and carries Frames + ResetDecoder instead of Data
+// (see SampleResult). Without this option, video topics behave like any other
+// topic - Sample returns the single floor frame in Data and IsVideo is false.
+// Non-video topics are unaffected either way. Mirrors WithVideoDecodable on
+// ReadMessages.
+func WithSampleVideoDecodable() SampleOption {
+	return func(c *sampleConfig) error {
+		c.videoDecodable = true
 		return nil
 	}
 }
@@ -158,7 +181,7 @@ func (r *Reader) Sample(queries []SampleQuery, opts ...SampleOption) ([][]Sample
 	for i, q := range queries {
 		specs[i] = iter.SampleSpec{Topic: q.Topic, Timestamps: q.Timestamps}
 	}
-	hits, err := iter.Sample(r.rs, summary, specs, cfg.strategy)
+	hits, err := iter.Sample(r.rs, summary, specs, cfg.strategy, cfg.videoDecodable)
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +207,7 @@ func (r *Reader) Sample(queries []SampleQuery, opts ...SampleOption) ([][]Sample
 					Found:        h.Found,
 					Timestamp:    h.Timestamp,
 					Data:         h.Data,
+					IsVideo:      h.IsVideo,
 					Frames:       frames,
 					ResetDecoder: h.ResetDecoder,
 				}
