@@ -573,6 +573,47 @@ func TestReadMessagesVideoDecodableSnapBackMultipleGOPs(t *testing.T) {
 	}
 }
 
+// Snap-back must reach the latest key frame <= start even when several GOPs
+// live in the SAME index chunk. A chunk-granularity snap (the chunk's first
+// key frame) would over-reach to the earliest GOP; the per-message key-frame
+// index must land on the GOP that actually contains the requested start.
+func TestReadMessagesVideoDecodableSnapBackMultipleGOPsSameChunk(t *testing.T) {
+	frames := []frame{
+		{ts: 10, isKeyFrame: true, data: []byte("KA")},
+		{ts: 20, isKeyFrame: false, data: []byte("A1")},
+		{ts: 30, isKeyFrame: true, data: []byte("KB")},
+		{ts: 40, isKeyFrame: false, data: []byte("B1")},
+		{ts: 50, isKeyFrame: true, data: []byte("KC")},
+		{ts: 60, isKeyFrame: false, data: []byte("C1")},
+	}
+	r := writerRoundTrip(t, func(w *Writer) {
+		mustOpenTopics(t, w, []string{"cam"}, []map[string]any{{}}, WithVideoTopic())
+		writeVideo(t, w, "cam", frames)
+		mustCloseTopic(t, w)
+		mustClose(t, w)
+	})
+
+	// Guard: with the default chunk config all frames land in a single chunk,
+	// so this exercises the multi-GOP-within-one-chunk path (not the
+	// chunk-boundary path covered above).
+	summary, err := r.Summary()
+	if err != nil {
+		t.Fatalf("Summary: %v", err)
+	}
+	if got := len(summary.TopicsInfos[0].IndexChunkInfoList); got != 1 {
+		t.Fatalf("expected all frames in 1 index chunk, got %d chunks", got)
+	}
+
+	// Start=45 is mid-GOP B; snap back must land on KB (ts=30), the latest key
+	// frame <= 45, not the chunk's first key frame KA (ts=10).
+	msgs := collect(t, r, WithStartTimestamp(45), WithVideoDecodable())
+	want := []string{"KB", "B1", "KC", "C1"}
+	got := msgPayloads(msgs)
+	if !stringSliceEqual(got, want) {
+		t.Errorf("snap-back within single chunk: want %v, got %v", want, got)
+	}
+}
+
 // Without WithVideoDecodable, ReadMessages must NOT snap back. The caller
 // gets exactly the time-filtered messages (possibly mid-GOP).
 func TestReadMessagesVideoNoSnapBackByDefault(t *testing.T) {

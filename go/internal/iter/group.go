@@ -29,6 +29,7 @@ type TopicsGroupIterator struct {
 	endTimestamp    int64
 	order           Order
 	isCompressed    bool
+	videoDecodable  bool
 	incrementFactor int
 
 	// Index chunk queue.
@@ -40,14 +41,14 @@ type TopicsGroupIterator struct {
 	currentMessageIndex int
 }
 
-func newTopicsGroupIterator(it *MessageIterator, topicIds map[uint16]struct{}, topicsInfo *format.TopicsInfo) *TopicsGroupIterator {
-	return newTopicsGroupIteratorWithStart(it, topicIds, topicsInfo, it.StartTimestamp)
-}
-
-// newTopicsGroupIteratorWithStart is the variant used when the per-group
-// start timestamp differs from the iterator's overall StartTimestamp (e.g.
-// after snap-back to a key frame for a video topic under WithVideoDecodable).
-func newTopicsGroupIteratorWithStart(it *MessageIterator, topicIds map[uint16]struct{}, topicsInfo *format.TopicsInfo, startTimestamp int64) *TopicsGroupIterator {
+// newTopicsGroupIterator builds the lazy per-group iterator. When
+// videoDecodable is true, sortAndFilter snaps each chunk's lower bound back to
+// the anchoring key frame so the emitted sequence is decodable cold; the
+// chunk-level time filter below still uses it.StartTimestamp, which correctly
+// retains the chunk that contains the anchoring key frame (every video chunk
+// begins with a key frame, so its EndTimestamp >= StartTimestamp).
+func newTopicsGroupIterator(it *MessageIterator, topicIds map[uint16]struct{}, topicsInfo *format.TopicsInfo, videoDecodable bool) *TopicsGroupIterator {
+	startTimestamp := it.StartTimestamp
 	indexChunkInfoList := make([]*format.IndexChunkInfo, 0, len(topicsInfo.IndexChunkInfoList))
 	indexChunkInfoLens := make([]int64, 0, len(topicsInfo.IndexChunkInfoList))
 	for i, indexChunkInfo := range topicsInfo.IndexChunkInfoList {
@@ -96,6 +97,7 @@ func newTopicsGroupIteratorWithStart(it *MessageIterator, topicIds map[uint16]st
 		endTimestamp:    it.EndTimestamp,
 		order:           it.Order,
 		isCompressed:    isCompressed,
+		videoDecodable:  videoDecodable,
 		incrementFactor: incrementFactor,
 
 		indexChunkInfoList:         indexChunkInfoList,
@@ -122,6 +124,7 @@ func (it *TopicsGroupIterator) Next() (int64, uint16, []byte, error) {
 			it.topicIds,
 			it.startTimestamp,
 			it.endTimestamp,
+			it.videoDecodable,
 			it.scratch,
 			&it.filteredMessageIndexes,
 			&it.filteredMessageLens,

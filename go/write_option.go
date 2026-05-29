@@ -41,9 +41,6 @@ func WithCompression() WriteOption {
 // consumers, they pass it in the per-topic metadata map themselves.
 func WithVideoTopic() WriteOption {
 	return func(metadata map[string]any) error {
-		if v, ok := metadata["is_compressed"].(bool); ok && v {
-			return ErrVideoTopicCannotBeCompressed
-		}
 		metadata["is_video"] = true
 		return nil
 	}

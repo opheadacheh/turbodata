@@ -50,6 +50,12 @@ func newSortAndFilterMergeScratch() *sortAndFilterMergeScratch {
 // reusable). At entry, items currently in *outMsgs are returned to the pool;
 // pass a fresh empty slice to opt out of that recycling.
 //
+// When videoDecodable is true, the effective lower bound is snapped back from
+// startTimestamp to the timestamp of the latest key frame whose timestamp is
+// <= startTimestamp within this chunk (using each topic's KeyFrameIndexes), so
+// the caller receives a sequence a decoder can consume cold. See
+// keyFrameStart for why this is correct without resurrecting older frames.
+//
 // This single function serves both the per-Next() hot path in
 // TopicsGroupIterator and the per-chunk setup in prepareCostAware.
 func sortAndFilter(
@@ -57,6 +63,7 @@ func sortAndFilter(
 	totalLen int64,
 	topicIds map[uint16]struct{},
 	startTimestamp, endTimestamp int64,
+	videoDecodable bool,
 	scratch *sortAndFilterMergeScratch,
 	outMsgs *[]*messageIndexWithTopicId,
 	outLens *[]int64,
@@ -140,6 +147,13 @@ func sortAndFilter(
 	}
 	scratch.sortedLens[len(scratch.sortedItems)-1] = totalLen - scratch.sortedItems[len(scratch.sortedItems)-1].messageIndex.OffsetInChunk
 
+	// For video-decodable groups, snap the lower bound back to the anchoring
+	// key frame so the kept sequence is decodable cold.
+	effectiveStart := startTimestamp
+	if videoDecodable {
+		effectiveStart = keyFrameStart(topicIndexes, startTimestamp)
+	}
+
 	// Filter by topic + timestamp range. Dropped items go back to the pool;
 	// kept items are appended to *outMsgs / *outLens.
 	for i, item := range scratch.sortedItems {
@@ -149,7 +163,7 @@ func sortAndFilter(
 			continue
 		}
 		ts := item.messageIndex.Timestamp
-		if ts < startTimestamp || ts > endTimestamp {
+		if ts < effectiveStart || ts > endTimestamp {
 			item.messageIndex = nil
 			scratch.itemPool.Put(item)
 			continue
@@ -157,4 +171,31 @@ func sortAndFilter(
 		*outMsgs = append(*outMsgs, item)
 		*outLens = append(*outLens, scratch.sortedLens[i])
 	}
+}
+
+// keyFrameStart returns the timestamp of the latest key frame whose timestamp
+// is <= startTimestamp, or startTimestamp unchanged if no such key frame
+// exists in this chunk.
+//
+// Video-decodable groups always hold exactly one topic, so a single topic
+// index suffices. KeyFrameIndexes are ascending positions into that topic's
+// timestamp-ordered MessageIndexes. The caller relies on chunk-level filtering
+// having already dropped chunks that end before startTimestamp, so the only
+// chunk holding a key frame <= startTimestamp is the one containing
+// startTimestamp; that key frame is the GOP anchor needed to decode the first
+// in-range frame, and it never resurrects frames from earlier chunks.
+func keyFrameStart(topicIndexes []*format.TopicIndex, startTimestamp int64) int64 {
+	if len(topicIndexes) == 0 {
+		return startTimestamp
+	}
+	ti := topicIndexes[0]
+	anchor := startTimestamp
+	for _, kfIdx := range ti.KeyFrameIndexes {
+		ts := ti.MessageIndexes[kfIdx].Timestamp
+		if ts > startTimestamp {
+			break
+		}
+		anchor = ts
+	}
+	return anchor
 }
