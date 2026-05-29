@@ -58,13 +58,9 @@ func TestNewReader(t *testing.T) {
 	validCompressed := makeCompressedSummary(t, validSummary)
 
 	t.Run("valid_footer_and_magic", func(t *testing.T) {
-		reader, err := NewReader(makeReaderFixture(t, nil, validCompressed, nil))
-		if err != nil {
-			t.Errorf("NewReader: %v", err)
-			return
-		}
+		reader := NewReader(makeReaderFixture(t, nil, validCompressed, nil))
 		if reader == nil {
-			t.Errorf("NewReader returned nil reader without error")
+			t.Errorf("NewReader returned nil reader")
 		}
 	})
 
@@ -73,11 +69,8 @@ func TestNewReader(t *testing.T) {
 			SummaryLen: int64(len(validCompressed)),
 			Magic:      [5]byte{'B', 'A', 'D', '!', '!'},
 		})
-		reader, err := NewReader(rs)
-		if err != nil {
-			t.Fatalf("NewReader: %v", err)
-		}
-		_, err = reader.Summary()
+		reader := NewReader(rs)
+		_, err := reader.Summary()
 		if err == nil {
 			t.Errorf("expected invalid magic error, got nil")
 		} else if !strings.Contains(err.Error(), "invalid magic number") {
@@ -86,11 +79,8 @@ func TestNewReader(t *testing.T) {
 	})
 
 	t.Run("truncated_input", func(t *testing.T) {
-		reader, err := NewReader(bytes.NewReader([]byte{0x01, 0x02}))
-		if err != nil {
-			t.Fatalf("NewReader: %v", err)
-		}
-		_, err = reader.Summary()
+		reader := NewReader(bytes.NewReader([]byte{0x01, 0x02}))
+		_, err := reader.Summary()
 		if err == nil {
 			t.Errorf("expected error for input shorter than footer, got nil")
 		}
@@ -123,11 +113,7 @@ func TestReaderSummary(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				compressed := makeCompressedSummary(t, tc.summary)
-				reader, err := NewReader(makeReaderFixture(t, []byte("body"), compressed, nil))
-				if err != nil {
-					t.Errorf("NewReader: %v", err)
-					return
-				}
+				reader := NewReader(makeReaderFixture(t, []byte("body"), compressed, nil))
 
 				got, err := reader.Summary()
 				if err != nil {
@@ -143,11 +129,7 @@ func TestReaderSummary(t *testing.T) {
 
 	t.Run("cached_result", func(t *testing.T) {
 		compressed := makeCompressedSummary(t, populated)
-		reader, err := NewReader(makeReaderFixture(t, []byte("body"), compressed, nil))
-		if err != nil {
-			t.Errorf("NewReader: %v", err)
-			return
-		}
+		reader := NewReader(makeReaderFixture(t, []byte("body"), compressed, nil))
 
 		first, err := reader.Summary()
 		if err != nil {
@@ -175,26 +157,18 @@ func TestReaderSummary(t *testing.T) {
 			SummaryLen: int64(len(compressed) + 1),
 			Magic:      [5]byte{'7', 'U', 'R', 'B', '0'},
 		})
-		reader, err := NewReader(rs)
-		if err != nil {
-			t.Errorf("NewReader: %v", err)
-			return
-		}
+		reader := NewReader(rs)
 
-		_, err = reader.Summary()
+		_, err := reader.Summary()
 		if err == nil {
 			t.Errorf("expected error for truncated compressed summary, got nil")
 		}
 	})
 
 	t.Run("invalid_compressed_bytes", func(t *testing.T) {
-		reader, err := NewReader(makeReaderFixture(t, nil, []byte("not-zstd-data"), nil))
-		if err != nil {
-			t.Errorf("NewReader: %v", err)
-			return
-		}
+		reader := NewReader(makeReaderFixture(t, nil, []byte("not-zstd-data"), nil))
 
-		_, err = reader.Summary()
+		_, err := reader.Summary()
 		if err == nil {
 			t.Errorf("expected decompress error for invalid compressed bytes, got nil")
 		}
@@ -206,11 +180,7 @@ func TestReaderSummary(t *testing.T) {
 			t.Fatalf("compress invalid summary payload: %v", err)
 		}
 
-		reader, err := NewReader(makeReaderFixture(t, nil, compressed, nil))
-		if err != nil {
-			t.Errorf("NewReader: %v", err)
-			return
-		}
+		reader := NewReader(makeReaderFixture(t, nil, compressed, nil))
 
 		_, err = reader.Summary()
 		if err == nil {
@@ -257,10 +227,7 @@ func TestSummaryWithHint(t *testing.T) {
 	t.Run("hint_zero_falls_back_to_seek_read", func(t *testing.T) {
 		// No hint: footer and summary each cost one Seek+Read (2 total).
 		c := &countingReadSource{rs: makeReaderFixture(t, body, compressed, nil)}
-		reader, err := NewReader(c)
-		if err != nil {
-			t.Fatalf("NewReader: %v", err)
-		}
+		reader := NewReader(c)
 
 		if _, err := reader.summaryWithHint(0); err != nil {
 			t.Fatalf("summaryWithHint(0): %v", err)
@@ -276,10 +243,7 @@ func TestSummaryWithHint(t *testing.T) {
 	t.Run("hint_covers_footer_and_summary_one_read_at", func(t *testing.T) {
 		// Sufficient hint: one ReadAt covers footer + compressed summary.
 		c := &countingReadSource{rs: makeReaderFixture(t, body, compressed, nil)}
-		reader, err := NewReader(c)
-		if err != nil {
-			t.Fatalf("NewReader: %v", err)
-		}
+		reader := NewReader(c)
 
 		hint := int64(len(compressed) + format.FooterLen + 8) // covers footer + summary + slack
 		if _, err := reader.summaryWithHint(hint); err != nil {
@@ -297,10 +261,7 @@ func TestSummaryWithHint(t *testing.T) {
 		// Hint covers footer but not summary: one ReadAt for the tail + one
 		// Seek+Read for the summary.
 		c := &countingReadSource{rs: makeReaderFixture(t, body, compressed, nil)}
-		reader, err := NewReader(c)
-		if err != nil {
-			t.Fatalf("NewReader: %v", err)
-		}
+		reader := NewReader(c)
 
 		if _, err := reader.summaryWithHint(format.FooterLen); err != nil {
 			t.Fatalf("summaryWithHint: %v", err)

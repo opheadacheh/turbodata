@@ -59,10 +59,7 @@ func runMcap(src io.ReadSeeker, sc Scenario) (int, error) {
 // runTd drains a turbodata scenario from src with optional extra ReadOptions
 // (e.g. WithReadStrategy). Returns the message count.
 func runTd(src turbodata.ReadSource, sc Scenario, extra ...turbodata.ReadOption) (int, error) {
-	r, err := turbodata.NewReader(src)
-	if err != nil {
-		return 0, err
-	}
+	r := turbodata.NewReader(src)
 	opts := make([]turbodata.ReadOption, 0, 4+len(extra))
 	if len(sc.Topics) > 0 {
 		opts = append(opts, turbodata.WithTopicNames(sc.Topics))

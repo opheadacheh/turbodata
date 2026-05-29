@@ -15,10 +15,7 @@ func buildSampleReader(t *testing.T, setup func(*Writer)) (*Reader, *trackingSou
 	t.Helper()
 	raw := buildFile(t, setup)
 	tracking := newTrackingSource(bytes.NewReader(raw))
-	r, err := NewReader(tracking)
-	if err != nil {
-		t.Fatalf("NewReader: %v", err)
-	}
+	r := NewReader(tracking)
 	return r, tracking
 }
 
@@ -400,10 +397,7 @@ func TestSampleConcurrency(t *testing.T) {
 	// concurrency is observable.
 	slow := &slowReadAtSource{rs: bytes.NewReader(raw), slow: 5 * time.Millisecond}
 	tracking := newTrackingSource(slow)
-	r, err := NewReader(tracking)
-	if err != nil {
-		t.Fatalf("NewReader: %v", err)
-	}
+	r := NewReader(tracking)
 
 	// Sample one T per chunk, so Phase A has 32 distinct ranges and Phase B
 	// has 32 more. CoalesceGap=0 + SplitThreshold=MaxInt64 means one ReadAt

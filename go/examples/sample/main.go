@@ -156,10 +156,7 @@ func openReader() *turbodata.Reader {
 	if err != nil {
 		log.Fatalf("open %s: %v (did you run examples/write first?)", inPath, err)
 	}
-	r, err := turbodata.NewReader(f)
-	if err != nil {
-		log.Fatalf("NewReader: %v", err)
-	}
+	r := turbodata.NewReader(f)
 	return r
 }
 

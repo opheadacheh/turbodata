@@ -22,11 +22,8 @@ type Reader struct {
 
 // NewReader creates a Reader backed by rs. No I/O is performed; the footer
 // and summary are loaded lazily on the first call to Summary or ReadMessages.
-func NewReader(rs ReadSource) (*Reader, error) {
-	if rs == nil {
-		return nil, ErrNilReadSource
-	}
-	return &Reader{rs: rs}, nil
+func NewReader(rs ReadSource) *Reader {
+	return &Reader{rs: rs}
 }
 
 // Summary returns the parsed summary, loading it lazily on the first call.

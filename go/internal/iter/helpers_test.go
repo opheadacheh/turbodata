@@ -32,10 +32,7 @@ func writerRoundTrip(t *testing.T, setup func(*turbodata.Writer)) *turbodata.Rea
 	buf := &bytes.Buffer{}
 	w := turbodata.NewWriter(buf)
 	setup(w)
-	r, err := turbodata.NewReader(bytes.NewReader(buf.Bytes()))
-	if err != nil {
-		t.Fatalf("NewReader: %v", err)
-	}
+	r := turbodata.NewReader(bytes.NewReader(buf.Bytes()))
 	return r
 }
 

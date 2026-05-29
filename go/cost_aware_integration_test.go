@@ -79,10 +79,7 @@ func TestDefaultPathRegressionGuard(t *testing.T) {
 		mustClose(t, w)
 	})
 	tracking := newTrackingSource(bytes.NewReader(raw))
-	r, err := NewReader(tracking)
-	if err != nil {
-		t.Fatalf("NewReader: %v", err)
-	}
+	r := NewReader(tracking)
 	out := collect(t, r)
 	if len(out) != 3 {
 		t.Fatalf("len=%d", len(out))
@@ -114,16 +111,10 @@ func TestCostAwareSemanticEquivalence(t *testing.T) {
 	}
 
 	raw := buildFile(t, build)
-	r1, err := NewReader(bytes.NewReader(raw))
-	if err != nil {
-		t.Fatalf("NewReader default: %v", err)
-	}
+	r1 := NewReader(bytes.NewReader(raw))
 	want := collect(t, r1)
 
-	r2, err := NewReader(bytes.NewReader(raw))
-	if err != nil {
-		t.Fatalf("NewReader cost-aware: %v", err)
-	}
+	r2 := NewReader(bytes.NewReader(raw))
 	strat := ReadStrategy{CoalesceGap: 1 << 20, SplitThreshold: math.MaxInt64, MaxConcurrency: 4}
 	got := collect(t, r2, WithReadStrategy(strat))
 
@@ -149,16 +140,10 @@ func TestCostAwareSemanticEquivalenceReverse(t *testing.T) {
 		mustClose(t, w)
 	}
 	raw := buildFile(t, build)
-	r1, err := NewReader(bytes.NewReader(raw))
-	if err != nil {
-		t.Fatalf("NewReader default: %v", err)
-	}
+	r1 := NewReader(bytes.NewReader(raw))
 	want := collect(t, r1, WithOrder(ReverseTimeOrder))
 
-	r2, err := NewReader(bytes.NewReader(raw))
-	if err != nil {
-		t.Fatalf("NewReader cost-aware: %v", err)
-	}
+	r2 := NewReader(bytes.NewReader(raw))
 	got := collect(t, r2, WithOrder(ReverseTimeOrder), WithReadStrategy(ReadStrategy{CoalesceGap: 1 << 20, SplitThreshold: math.MaxInt64, MaxConcurrency: 2}))
 
 	if len(got) != len(want) {
@@ -196,17 +181,11 @@ func TestSelectiveUncompressedBytesSavings(t *testing.T) {
 	raw := buildFile(t, build)
 
 	trkDefault := newTrackingSource(bytes.NewReader(raw))
-	rDef, err := NewReader(trkDefault)
-	if err != nil {
-		t.Fatalf("NewReader default: %v", err)
-	}
+	rDef := NewReader(trkDefault)
 	defaultOut := collect(t, rDef, WithTopicNames([]string{"kept"}))
 
 	trkCost := newTrackingSource(bytes.NewReader(raw))
-	rCost, err := NewReader(trkCost)
-	if err != nil {
-		t.Fatalf("NewReader cost-aware: %v", err)
-	}
+	rCost := NewReader(trkCost)
 	strat := ReadStrategy{CoalesceGap: 0, SplitThreshold: math.MaxInt64, MaxConcurrency: 4}
 	costOut := collect(t, rCost, WithTopicNames([]string{"kept"}), WithReadStrategy(strat))
 
@@ -249,10 +228,7 @@ func TestCostAwareParallelism(t *testing.T) {
 	// the parallelism is visible.
 	slow := &slowReadAtSource{rs: bytes.NewReader(raw), slow: 5 * time.Millisecond}
 	tracking := newTrackingSource(slow)
-	r, err := NewReader(tracking)
-	if err != nil {
-		t.Fatalf("NewReader: %v", err)
-	}
+	r := NewReader(tracking)
 	// CoalesceGap=0 keeps each chunk in its own op; concurrency=8 lets the
 	// fetcher actually fan out.
 	strat := ReadStrategy{CoalesceGap: 0, SplitThreshold: math.MaxInt64, MaxConcurrency: 8}
@@ -283,11 +259,11 @@ func TestCostAwareWithTopicAndTimeFilters(t *testing.T) {
 	}
 	raw := buildFile(t, build)
 
-	r1, _ := NewReader(bytes.NewReader(raw))
+	r1 := NewReader(bytes.NewReader(raw))
 	wantOpts := []ReadOption{WithTopicNames([]string{"a"}), WithStartTimestamp(20), WithEndTimestamp(40)}
 	want := collect(t, r1, wantOpts...)
 
-	r2, _ := NewReader(bytes.NewReader(raw))
+	r2 := NewReader(bytes.NewReader(raw))
 	got := collect(t, r2, append(wantOpts, WithReadStrategy(ReadStrategy{CoalesceGap: 1 << 20, SplitThreshold: math.MaxInt64, MaxConcurrency: 4}))...)
 
 	if len(want) != len(got) || len(want) != 3 {

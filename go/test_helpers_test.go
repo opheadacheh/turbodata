@@ -29,10 +29,7 @@ func buildFile(t *testing.T, setup func(*Writer)) []byte {
 // writerRoundTrip runs setup against a Writer, then returns a Reader over the result.
 func writerRoundTrip(t *testing.T, setup func(*Writer)) *Reader {
 	t.Helper()
-	r, err := NewReader(bytes.NewReader(buildFile(t, setup)))
-	if err != nil {
-		t.Fatalf("NewReader: %v", err)
-	}
+	r := NewReader(bytes.NewReader(buildFile(t, setup)))
 	return r
 }
 

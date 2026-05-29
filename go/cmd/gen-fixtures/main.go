@@ -236,10 +236,7 @@ func writeGolden(fixturePath string) error {
 	}
 
 	rs := newByteReadSource(data)
-	r, err := turbodata.NewReader(rs)
-	if err != nil {
-		return err
-	}
+	r := turbodata.NewReader(rs)
 	summary, err := r.Summary()
 	if err != nil {
 		return err

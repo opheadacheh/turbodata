@@ -266,10 +266,7 @@ func openReader() *turbodata.Reader {
 	// Each demo leaks its file handle on purpose: the example is short and
 	// closing the file would close the underlying ReadSource the iterator
 	// uses. A real program would manage the lifetime explicitly.
-	r, err := turbodata.NewReader(f)
-	if err != nil {
-		log.Fatalf("NewReader: %v", err)
-	}
+	r := turbodata.NewReader(f)
 	return r
 }
 
