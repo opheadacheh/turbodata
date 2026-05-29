@@ -1,13 +1,5 @@
 package format
 
-type TypeCode uint8
-
-const (
-	TypeCodeUnknown TypeCode = iota
-	TypeCodeTopicInfo
-	TypeCodeGroupTopicsInfo
-)
-
 type Footer struct {
 	SummaryLen int64
 	Magic      [5]byte
