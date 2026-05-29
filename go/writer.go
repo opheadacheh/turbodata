@@ -99,7 +99,7 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 	// Video groups are constrained: exactly one topic, never co-compressed.
 	anyVideo := false
 	for i := range metadatas {
-		if v, ok := metadatas[i]["is_video"].(bool); ok && v {
+		if v, ok := metadatas[i][format.MetaKeyVideo].(bool); ok && v {
 			anyVideo = true
 			break
 		}
@@ -108,7 +108,7 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 		if len(names) != 1 {
 			return ErrVideoGroupMustBeSingleTopic
 		}
-		if v, ok := metadatas[0]["is_compressed"].(bool); ok && v {
+		if v, ok := metadatas[0][format.MetaKeyCompressed].(bool); ok && v {
 			return ErrVideoTopicCannotBeCompressed
 		}
 	}
@@ -136,7 +136,7 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 		TotalLen:           0,
 	})
 
-	chunkConfig, ok := metadatas[0]["chunk_config"].(*ChunkConfig)
+	chunkConfig, ok := metadatas[0][format.MetaKeyChunkConfig].(*ChunkConfig)
 	if !ok {
 		chunkConfig = &ChunkConfig{
 			Mode: ChunkThresholdModeSize,
@@ -144,7 +144,14 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 		}
 	}
 
-	isCompressed, ok := metadatas[0]["is_compressed"].(bool)
+	// chunk_config is write-time-only state; strip it from every topic's
+	// metadata so it never reaches the persisted summary. is_compressed and
+	// is_video are intentionally retained: the reader depends on them.
+	for i := range metadatas {
+		delete(metadatas[i], format.MetaKeyChunkConfig)
+	}
+
+	isCompressed, ok := metadatas[0][format.MetaKeyCompressed].(bool)
 	if !ok {
 		isCompressed = false
 	}

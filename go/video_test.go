@@ -49,10 +49,10 @@ func TestWithVideoTopicOption(t *testing.T) {
 		if !w.writerConfig.isVideo {
 			t.Error("expected isVideo=true")
 		}
-		// is_video is what readers look at to decide whether to apply the
+		// MetaKeyVideo is what readers look at to decide whether to apply the
 		// video-aware sampling and snap-back behaviour.
-		if got := metadata["is_video"]; got != true {
-			t.Errorf("metadata[is_video] = %v, want true", got)
+		if got := metadata[format.MetaKeyVideo]; got != true {
+			t.Errorf("metadata[%s] = %v, want true", format.MetaKeyVideo, got)
 		}
 	})
 

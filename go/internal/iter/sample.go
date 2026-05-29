@@ -168,9 +168,9 @@ func (e *sampleEngine) resolveTopic(qs *queryState) {
 			if tm.Name == qs.spec.Topic {
 				qs.groupIdx = gi
 				qs.topicId = tm.Id
-				compressed, _ := ti.TopicMetadatas[0].Metadata["is_compressed"].(bool)
+				compressed, _ := ti.TopicMetadatas[0].Metadata[format.MetaKeyCompressed].(bool)
 				qs.isCompressed = compressed
-				video, _ := ti.TopicMetadatas[0].Metadata["is_video"].(bool)
+				video, _ := ti.TopicMetadatas[0].Metadata[format.MetaKeyVideo].(bool)
 				qs.isVideo = video
 				return
 			}

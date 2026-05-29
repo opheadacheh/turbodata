@@ -1,17 +1,19 @@
 package turbodata
 
+import "turbodata/format"
+
 type WriteOption func(metadata map[string]any) error
 
 func WithChunkConfig(chunkConfig *ChunkConfig) WriteOption {
 	return func(metadata map[string]any) error {
-		metadata["chunk_config"] = chunkConfig
+		metadata[format.MetaKeyChunkConfig] = chunkConfig
 		return nil
 	}
 }
 
 func WithCompression() WriteOption {
 	return func(metadata map[string]any) error {
-		metadata["is_compressed"] = true
+		metadata[format.MetaKeyCompressed] = true
 		return nil
 	}
 }
@@ -41,7 +43,7 @@ func WithCompression() WriteOption {
 // consumers, they pass it in the per-topic metadata map themselves.
 func WithVideoTopic() WriteOption {
 	return func(metadata map[string]any) error {
-		metadata["is_video"] = true
+		metadata[format.MetaKeyVideo] = true
 		return nil
 	}
 }

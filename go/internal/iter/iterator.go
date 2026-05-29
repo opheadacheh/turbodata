@@ -131,7 +131,7 @@ func isVideoTopicsInfo(ti *format.TopicsInfo) bool {
 	if len(ti.TopicMetadatas) == 0 {
 		return false
 	}
-	v, _ := ti.TopicMetadatas[0].Metadata["is_video"].(bool)
+	v, _ := ti.TopicMetadatas[0].Metadata[format.MetaKeyVideo].(bool)
 	return v
 }
 
@@ -160,7 +160,7 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 			continue
 		}
 
-		isCompressed, _ := topicsInfo.TopicMetadatas[0].Metadata["is_compressed"].(bool)
+		isCompressed, _ := topicsInfo.TopicMetadatas[0].Metadata[format.MetaKeyCompressed].(bool)
 		videoDecodable := it.VideoDecodable && isVideoTopicsInfo(topicsInfo)
 
 		// Time-range filter at the chunk level (same logic newTopicsGroupIterator

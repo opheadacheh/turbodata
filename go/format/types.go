@@ -1,5 +1,16 @@
 package format
 
+// Internal per-topic metadata keys used to carry write-format control flags
+// alongside caller-supplied metadata. The __td_ prefix namespaces them away
+// from user keys. MetaKeyCompressed and MetaKeyVideo are persisted into the
+// summary (readers depend on them); MetaKeyChunkConfig is write-time-only and
+// is stripped before serialization.
+const (
+	MetaKeyCompressed  = "__td_is_compressed"
+	MetaKeyVideo       = "__td_is_video"
+	MetaKeyChunkConfig = "__td_chunk_config"
+)
+
 type Footer struct {
 	SummaryLen int64
 	Magic      [5]byte
