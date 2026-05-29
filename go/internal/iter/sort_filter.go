@@ -12,7 +12,7 @@ import (
 // owns no per-call data once a call returns.
 type sortAndFilterMergeScratch struct {
 	sortHeap    *MessageIndexHeap
-	idToIndexes map[uint16][]*format.MessageIndex
+	idToIndexes map[uint16][]format.MessageIndex
 	idToCursor  map[uint16]int
 
 	// Sorted-but-not-yet-filtered working slices. Capacity grows; never shrinks.
@@ -29,7 +29,7 @@ type sortAndFilterMergeScratch struct {
 func newSortAndFilterMergeScratch() *sortAndFilterMergeScratch {
 	s := &sortAndFilterMergeScratch{
 		sortHeap:    &MessageIndexHeap{},
-		idToIndexes: make(map[uint16][]*format.MessageIndex),
+		idToIndexes: make(map[uint16][]format.MessageIndex),
 		idToCursor:  make(map[uint16]int),
 	}
 	heap.Init(s.sortHeap)
@@ -99,10 +99,10 @@ func sortAndFilter(
 	if len(topicIndexes) == 1 {
 		// Fast path: single topic, messages are already in offset order.
 		ti := topicIndexes[0]
-		for _, mi := range ti.MessageIndexes {
+		for i := range ti.MessageIndexes {
 			item := scratch.itemPool.Get().(*messageIndexWithTopicId)
 			item.topicId = ti.Id
-			item.messageIndex = mi
+			item.messageIndex = &ti.MessageIndexes[i]
 			scratch.sortedItems = append(scratch.sortedItems, item)
 		}
 	} else {
@@ -120,7 +120,7 @@ func sortAndFilter(
 			scratch.idToIndexes[ti.Id] = ti.MessageIndexes
 			item := scratch.itemPool.Get().(*messageIndexWithTopicId)
 			item.topicId = ti.Id
-			item.messageIndex = ti.MessageIndexes[0]
+			item.messageIndex = &ti.MessageIndexes[0]
 			heap.Push(scratch.sortHeap, item)
 			scratch.idToCursor[ti.Id] = 1
 		}
@@ -135,7 +135,7 @@ func sortAndFilter(
 			}
 			next := scratch.itemPool.Get().(*messageIndexWithTopicId)
 			next.topicId = tid
-			next.messageIndex = scratch.idToIndexes[tid][cursor]
+			next.messageIndex = &scratch.idToIndexes[tid][cursor]
 			heap.Push(scratch.sortHeap, next)
 			scratch.idToCursor[tid]++
 		}

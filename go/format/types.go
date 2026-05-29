@@ -64,7 +64,7 @@ type IndexChunk struct {
 
 type TopicIndex struct {
 	Id              uint16
-	MessageIndexes  []*MessageIndex
+	MessageIndexes  []MessageIndex
 	KeyFrameIndexes []uint32
 }
 

@@ -33,7 +33,7 @@ type Writer struct {
 
 	// Chunk-level state.
 	chunkStatus        *ChunkStatus
-	idToMessageIndexes map[uint16][]*format.MessageIndex
+	idToMessageIndexes map[uint16][]format.MessageIndex
 	// idToKeyFrameIndexes accumulates per-topic key frame positions
 	// (indexes into idToMessageIndexes[id]) for the in-progress chunk.
 	// Reset per topic at chunk flush. Non-video topics never populate this.
@@ -68,7 +68,7 @@ func NewWriter(w io.Writer) *Writer {
 		compressBuf: &buffer.ReusableBuffer{
 			Data: make([]byte, 0),
 		},
-		idToMessageIndexes:  make(map[uint16][]*format.MessageIndex),
+		idToMessageIndexes:  make(map[uint16][]format.MessageIndex),
 		idToKeyFrameIndexes: make(map[uint16][]uint32),
 	}
 }
@@ -126,7 +126,7 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 
 		namesToIds[names[i]] = w.currentTopicId
 		topicIds[i] = w.currentTopicId
-		w.idToMessageIndexes[w.currentTopicId] = []*format.MessageIndex{}
+		w.idToMessageIndexes[w.currentTopicId] = []format.MessageIndex{}
 		w.idToKeyFrameIndexes[w.currentTopicId] = []uint32{}
 	}
 
@@ -190,7 +190,7 @@ func (w *Writer) WriteMessage(topicName string, message []byte, timestamp int64)
 	}
 
 	w.lastTimestamp = timestamp
-	w.idToMessageIndexes[id] = append(w.idToMessageIndexes[id], &format.MessageIndex{
+	w.idToMessageIndexes[id] = append(w.idToMessageIndexes[id], format.MessageIndex{
 		Timestamp:     timestamp,
 		OffsetInChunk: int64(w.buf.Len()),
 	})
@@ -272,7 +272,7 @@ func (w *Writer) WriteVideoMessage(topicName string, message []byte, timestamp i
 
 	w.lastTimestamp = timestamp
 	offsetInChunk := int64(w.buf.Len())
-	w.idToMessageIndexes[id] = append(w.idToMessageIndexes[id], &format.MessageIndex{
+	w.idToMessageIndexes[id] = append(w.idToMessageIndexes[id], format.MessageIndex{
 		Timestamp:     timestamp,
 		OffsetInChunk: offsetInChunk,
 	})
@@ -370,7 +370,7 @@ func (w *Writer) writeChunk() error {
 			MessageIndexes:  messageIndexes,
 			KeyFrameIndexes: keyFrameIndexes,
 		})
-		w.idToMessageIndexes[id] = []*format.MessageIndex{}
+		w.idToMessageIndexes[id] = []format.MessageIndex{}
 		w.idToKeyFrameIndexes[id] = []uint32{}
 	}
 

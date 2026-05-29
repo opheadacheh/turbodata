@@ -256,10 +256,10 @@ func ReadTopicIndex(r io.Reader) (*TopicIndex, error) {
 	if _, err := io.ReadFull(r, miBuf); err != nil {
 		return nil, err
 	}
-	topicIndex.MessageIndexes = make([]*MessageIndex, messageIndexLen)
+	topicIndex.MessageIndexes = make([]MessageIndex, messageIndexLen)
 	for i := 0; i < int(messageIndexLen); i++ {
 		off := i * messageIndexSize
-		topicIndex.MessageIndexes[i] = &MessageIndex{
+		topicIndex.MessageIndexes[i] = MessageIndex{
 			Timestamp:     int64(binary.BigEndian.Uint64(miBuf[off : off+8])),
 			OffsetInChunk: int64(binary.BigEndian.Uint64(miBuf[off+8 : off+16])),
 		}
@@ -289,8 +289,8 @@ func WriteTopicIndex(w io.Writer, topicIndex *TopicIndex) error {
 		return err
 	}
 
-	for _, messageIndex := range topicIndex.MessageIndexes {
-		if err := WriteMessageIndex(w, messageIndex); err != nil {
+	for i := range topicIndex.MessageIndexes {
+		if err := WriteMessageIndex(w, &topicIndex.MessageIndexes[i]); err != nil {
 			return err
 		}
 	}

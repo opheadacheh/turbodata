@@ -447,7 +447,7 @@ func TestMessageIndex(t *testing.T) {
 func TestTopicIndex(t *testing.T) {
 	populated := &TopicIndex{
 		Id: 7,
-		MessageIndexes: []*MessageIndex{
+		MessageIndexes: []MessageIndex{
 			{Timestamp: 1, OffsetInChunk: 10},
 			{Timestamp: 2, OffsetInChunk: 20},
 		},
@@ -473,7 +473,7 @@ func TestTopicIndex(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
 		empty := &TopicIndex{
 			Id:              0,
-			MessageIndexes:  []*MessageIndex{},
+			MessageIndexes:  []MessageIndex{},
 			KeyFrameIndexes: []uint32{},
 		}
 		buf := &bytes.Buffer{}
@@ -507,12 +507,12 @@ func TestIndexChunk(t *testing.T) {
 		TopicIndexes: []*TopicIndex{
 			{
 				Id:              1,
-				MessageIndexes:  []*MessageIndex{{Timestamp: 100, OffsetInChunk: 0}},
+				MessageIndexes:  []MessageIndex{{Timestamp: 100, OffsetInChunk: 0}},
 				KeyFrameIndexes: []uint32{0},
 			},
 			{
 				Id:              2,
-				MessageIndexes:  []*MessageIndex{{Timestamp: 200, OffsetInChunk: 16}},
+				MessageIndexes:  []MessageIndex{{Timestamp: 200, OffsetInChunk: 16}},
 				KeyFrameIndexes: []uint32{0},
 			},
 		},
