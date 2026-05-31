@@ -18,18 +18,121 @@ type Reader struct {
 
 	summary *format.Summary
 	footer  *format.Footer
+
+	// topicRemap maps in-file topic names to the exposed names this Reader
+	// presents to callers. nil/empty means identity (zero behavior change).
+	topicRemap map[string]string
+
+	// Cached prepareRename outputs (computed lazily once the summary is
+	// known). renameInverse maps exposed -> in-file for query/filter
+	// translation; renameErr captures a remap collision detected against the
+	// actual summary.
+	renamePrepared bool
+	renameInverse  map[string]string
+	renameErr      error
+}
+
+// ReaderOption configures a Reader at construction time.
+type ReaderOption func(*Reader)
+
+// WithTopicRemap presents in-file topic names under different exposed names.
+// The map is keyed by in-file name and valued by the exposed name emitted from
+// ReadMessages, accepted by WithTopicNames and SampleQuery.Topic, and reported
+// by Summary. Names absent from the map pass through unchanged.
+//
+// The remap is validated lazily against the file's summary on first use: it is
+// an error for two topics to collapse onto the same exposed name (whether two
+// in-file names map to the same target, or a renamed name collides with an
+// untouched in-file name).
+func WithTopicRemap(m map[string]string) ReaderOption {
+	return func(r *Reader) {
+		r.topicRemap = m
+	}
 }
 
 // NewReader creates a Reader backed by rs. No I/O is performed; the footer
 // and summary are loaded lazily on the first call to Summary or ReadMessages.
-func NewReader(rs ReadSource) *Reader {
-	return &Reader{rs: rs}
+func NewReader(rs ReadSource, opts ...ReaderOption) *Reader {
+	r := &Reader{rs: rs}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
+}
+
+// prepareRename builds the exposed -> in-file inverse map once the summary is
+// known and validates that no two topics collapse onto the same exposed name.
+// Results (including any error) are cached. Returns (nil, nil) when no remap is
+// configured.
+func (r *Reader) prepareRename(summary *format.Summary) (map[string]string, error) {
+	if r.renamePrepared {
+		return r.renameInverse, r.renameErr
+	}
+	r.renamePrepared = true
+	if len(r.topicRemap) == 0 {
+		return nil, nil
+	}
+	inverse := make(map[string]string)
+	for _, ti := range summary.TopicsInfos {
+		for _, tm := range ti.TopicMetadatas {
+			exposed := tm.Name
+			if v, ok := r.topicRemap[tm.Name]; ok {
+				exposed = v
+			}
+			if prev, dup := inverse[exposed]; dup {
+				r.renameErr = fmt.Errorf("turbodata: topic remap produces duplicate exposed name %q (from in-file topics %q and %q)", exposed, prev, tm.Name)
+				return nil, r.renameErr
+			}
+			inverse[exposed] = tm.Name
+		}
+	}
+	r.renameInverse = inverse
+	return r.renameInverse, nil
+}
+
+// exposedSummary returns a shallow copy of summary with TopicMetadata.Name
+// rewritten to exposed names. The IndexChunkInfoList and Metadata maps are
+// shared with the cached in-file summary (read-only here). When no remap is
+// configured the original summary is returned unchanged.
+func (r *Reader) exposedSummary(summary *format.Summary) (*format.Summary, error) {
+	if len(r.topicRemap) == 0 {
+		return summary, nil
+	}
+	if _, err := r.prepareRename(summary); err != nil {
+		return nil, err
+	}
+	out := &format.Summary{TopicsInfos: make([]*format.TopicsInfo, len(summary.TopicsInfos))}
+	for i, ti := range summary.TopicsInfos {
+		nti := &format.TopicsInfo{
+			TopicMetadatas:     make([]*format.TopicMetadata, len(ti.TopicMetadatas)),
+			IndexChunkInfoList: ti.IndexChunkInfoList,
+			TotalLen:           ti.TotalLen,
+		}
+		for j, tm := range ti.TopicMetadatas {
+			name := tm.Name
+			if v, ok := r.topicRemap[name]; ok {
+				name = v
+			}
+			nti.TopicMetadatas[j] = &format.TopicMetadata{
+				Id:       tm.Id,
+				Name:     name,
+				Metadata: tm.Metadata,
+			}
+		}
+		out.TopicsInfos[i] = nti
+	}
+	return out, nil
 }
 
 // Summary returns the parsed summary, loading it lazily on the first call.
-// Subsequent calls return the cached value.
+// Subsequent calls return the cached value. When a topic remap is configured,
+// TopicMetadata.Name reports exposed names.
 func (r *Reader) Summary() (*format.Summary, error) {
-	return r.summaryWithHint(0)
+	summary, err := r.summaryWithHint(0)
+	if err != nil {
+		return nil, err
+	}
+	return r.exposedSummary(summary)
 }
 
 // summaryWithHint loads the footer and summary, optionally via a single
@@ -120,6 +223,28 @@ func (r *Reader) ReadMessages(opts ...ReadOption) (*iter.MessageIterator, error)
 		return nil, err
 	}
 	it.Summary = summary
+
+	if len(r.topicRemap) > 0 {
+		inverse, err := r.prepareRename(summary)
+		if err != nil {
+			return nil, err
+		}
+		// Translate caller-supplied exposed names to in-file names; internal
+		// matching stays in in-file space. Unknown names pass through and
+		// simply match nothing.
+		if len(it.TopicNames) > 0 {
+			translated := make([]string, len(it.TopicNames))
+			for i, n := range it.TopicNames {
+				if infile, ok := inverse[n]; ok {
+					translated[i] = infile
+				} else {
+					translated[i] = n
+				}
+			}
+			it.TopicNames = translated
+		}
+		it.TopicRename = r.topicRemap
+	}
 
 	if err := it.Prepare(); err != nil {
 		return nil, err

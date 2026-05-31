@@ -38,6 +38,12 @@ type MessageIterator struct {
 	// whose timestamp is <= StartTimestamp. Lets the caller hand the
 	// resulting message sequence to a decoder cold.
 	VideoDecodable bool
+	// TopicRename maps in-file topic names to the exposed names emitted by
+	// NextInto. Only names present in the map are rewritten; everything else
+	// passes through unchanged. nil/empty means identity. All other
+	// configuration (TopicNames, matching) stays in in-file name space; the
+	// rename is applied solely when building topicIdToNames.
+	TopicRename map[string]string
 
 	// Default-path runtime state.
 	topicsGroupIterators []*TopicsGroupIterator
@@ -92,7 +98,11 @@ func (it *MessageIterator) Prepare() error {
 				continue
 			}
 			topicIds[topicMetadata.Id] = struct{}{}
-			it.topicIdToNames[topicMetadata.Id] = topicMetadata.Name
+			name := topicMetadata.Name
+			if exposed, ok := it.TopicRename[name]; ok {
+				name = exposed
+			}
+			it.topicIdToNames[topicMetadata.Id] = name
 		}
 	}
 

@@ -176,6 +176,25 @@ func (r *Reader) Sample(queries []SampleQuery, opts ...SampleOption) ([][]Sample
 		return nil, err
 	}
 
+	// When a remap is configured, queries arrive in exposed-name space.
+	// Translate to in-file names before validation and the engine call;
+	// SampleResult is positional, so no translation back is needed.
+	if len(r.topicRemap) > 0 {
+		inverse, err := r.prepareRename(summary)
+		if err != nil {
+			return nil, err
+		}
+		translated := make([]SampleQuery, len(queries))
+		for i, q := range queries {
+			topic := q.Topic
+			if infile, ok := inverse[topic]; ok {
+				topic = infile
+			}
+			translated[i] = SampleQuery{Topic: topic, Timestamps: q.Timestamps}
+		}
+		queries = translated
+	}
+
 	if err := validateSampleQueries(queries, summary); err != nil {
 		return nil, err
 	}
