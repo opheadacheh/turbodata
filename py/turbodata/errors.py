@@ -58,3 +58,25 @@ class SampleValidationError(TurbodataError):
     def __init__(self, violations):
         self.violations = list(violations)
         super().__init__("; ".join(self.violations))
+
+
+# ---- Video-topic constraints. See Writer.open_topics(video=True) and
+# Writer.write_video_message. -------------------------------------------------
+class VideoGroupMustBeSingleTopicError(TurbodataError):
+    pass
+
+
+class VideoTopicCannotBeCompressedError(TurbodataError):
+    pass
+
+
+class FirstVideoMessageMustBeKeyFrameError(TurbodataError):
+    pass
+
+
+class WriteMessageOnVideoTopicError(TurbodataError):
+    pass
+
+
+class WriteVideoMessageOnNonVideoTopicError(TurbodataError):
+    pass

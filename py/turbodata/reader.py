@@ -10,7 +10,7 @@ Both produce the same merged time-ordered (or reverse-time-ordered) stream.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Iterator, List, Optional, Set, Tuple
 
 from . import _codec, _compress
@@ -61,12 +61,44 @@ class SampleQuery:
 
 
 @dataclass
+class Frame:
+    """One coded video frame surfaced as part of a SampleResult's GOP prefix or
+    incremental tail. `data` is an owned copy and is safe to retain."""
+
+    timestamp: int
+    is_key_frame: bool
+    data: bytes
+
+
+@dataclass
 class SampleResult:
-    """One returned floor message. `data` is an owned copy; safe to retain."""
+    """One returned message. ``out[i][j]`` corresponds to queries[i].timestamps[j].
+
+    Without video_decodable, every topic (including video topics) returns its
+    floor message in ``data`` (an owned copy), ``is_video`` is False, and
+    ``frames`` / ``reset_decoder`` are unset.
+
+    With video_decodable, results for video topics instead carry a
+    decoder-ready GOP sequence and set ``is_video`` True. For those results,
+    within a single row (one topic, strictly increasing query timestamps):
+
+      - ``data`` is empty; the frame bytes live in ``frames`` and the target
+        frame is the last element. ``timestamp`` names that target frame.
+      - For the first found result in each GOP encountered in the row:
+        ``reset_decoder`` is True, ``frames`` = [keyframe ... target] in
+        storage (decode) order. The decoder must reset before feeding.
+      - For subsequent found results within the same GOP: ``reset_decoder`` is
+        False, ``frames`` = [previous_target+1 ... target] (only the new
+        frames). ``frames`` is empty when two queries resolve to the same
+        target frame; ``timestamp`` still names that target.
+    """
 
     found: bool
     timestamp: int
     data: bytes
+    is_video: bool = False
+    frames: List[Frame] = field(default_factory=list)
+    reset_decoder: bool = False
 
 
 DEFAULT_SAMPLE_STRATEGY = ReadStrategy(
@@ -128,6 +160,7 @@ class Reader:
         strategy: Optional[ReadStrategy] = None,
         tail_prefetch: int = 0,
         copy: bool = False,
+        video_decodable: bool = False,
     ) -> Iterator[Message]:
         """Iterate messages from the file.
 
@@ -138,6 +171,11 @@ class Reader:
         strategy       : if provided, switch to the cost-aware concurrent path
         tail_prefetch  : trailing bytes to read speculatively for the summary
         copy           : if True, yield fresh bytes per message (safe to keep)
+        video_decodable: if True, for any video topic in scope the effective
+                         per-group start_timestamp is snapped back to the latest
+                         key frame whose timestamp is <= start_timestamp, so the
+                         sequence can be fed to a decoder cold. Non-video topics
+                         are unaffected.
 
         Returns an iterator. Iteration runs lazily; pulling None ends it.
         """
@@ -160,11 +198,13 @@ class Reader:
 
         if strategy is not None:
             group_its = self._prepare_cost_aware(
-                summary, topic_ids, wanted, start_timestamp, end_timestamp, order, strategy
+                summary, topic_ids, wanted, start_timestamp, end_timestamp, order,
+                strategy, video_decodable,
             )
         else:
             group_its = self._prepare_default(
-                summary, topic_ids, wanted, start_timestamp, end_timestamp, order
+                summary, topic_ids, wanted, start_timestamp, end_timestamp, order,
+                video_decodable,
             )
 
         return self._merge_groups(group_its, id_to_name, order, copy)
@@ -216,6 +256,7 @@ class Reader:
         start_ts: int,
         end_ts: int,
         order: Order,
+        video_decodable: bool = False,
     ) -> List[TopicsGroupIterator]:
         out: List[TopicsGroupIterator] = []
         for ti in summary.topics_infos:
@@ -228,6 +269,7 @@ class Reader:
                 start_timestamp=start_ts,
                 end_timestamp=end_ts,
                 order=order,
+                video_decodable=video_decodable and _is_video_topics_info(ti),
             )
             if git.has_any():
                 out.append(git)
@@ -243,27 +285,29 @@ class Reader:
         end_ts: int,
         order: Order,
         strategy: ReadStrategy,
+        video_decodable: bool = False,
     ) -> List[PreloadedTopicsGroupIterator]:
         fetcher = Fetcher(self._source, strategy.max_concurrency)
 
-        scoped: List[Tuple[_codec.TopicsInfo, bool, List[_codec.IndexChunkInfo], List[int]]] = []
+        scoped: List[Tuple[_codec.TopicsInfo, bool, List[_codec.IndexChunkInfo], List[int], bool]] = []
         for ti in summary.topics_infos:
             if not any(tm.name in wanted for tm in ti.topic_metadatas):
                 continue
             is_compressed = bool(
                 ti.topic_metadatas[0].metadata.get("is_compressed", False)
             )
+            group_video = video_decodable and _is_video_topics_info(ti)
             infos, lens = _filter_index_chunks_in_range(ti, start_ts, end_ts)
             if not infos:
                 continue
-            scoped.append((ti, is_compressed, infos, lens))
+            scoped.append((ti, is_compressed, infos, lens, group_video))
 
         if not scoped:
             return []
 
         # Phase A: fetch all index chunks across all groups.
         ranges_a: List[Range] = []
-        for _ti, _ic, infos, lens in scoped:
+        for _ti, _ic, infos, lens, _gv in scoped:
             for info, ln in zip(infos, lens):
                 ranges_a.append(Range(offset=info.offset, length=ln))
         ops_a, locs_a = plan(ranges_a, strategy.coalesce_gap, strategy.split_threshold)
@@ -274,7 +318,7 @@ class Reader:
         per_group_chunks: List[List[Tuple[_codec.IndexChunk, List[_MsgIdxWithTopicId], List[int]]]] = [
             [] for _ in scoped
         ]
-        for gi, (_ti, _ic, infos, _lens) in enumerate(scoped):
+        for gi, (_ti, _ic, infos, _lens, group_video) in enumerate(scoped):
             for info in infos:
                 raw = loaded_index.get(info.offset)
                 decompressed = _compress.decompress(raw)
@@ -285,13 +329,14 @@ class Reader:
                     topic_ids,
                     start_ts,
                     end_ts,
+                    group_video,
                 )
                 per_group_chunks[gi].append((ic, msgs, m_lens))
 
         # Phase B: fetch data ranges. Chunk-level for compressed groups,
         # per-message for uncompressed groups.
         ranges_b: List[Range] = []
-        for gi, (_ti, is_compressed, _infos, _lens) in enumerate(scoped):
+        for gi, (_ti, is_compressed, _infos, _lens, _gv) in enumerate(scoped):
             if is_compressed:
                 for ic, msgs, _m_lens in per_group_chunks[gi]:
                     if not msgs:
@@ -312,7 +357,7 @@ class Reader:
 
         # Build per-group preloaded iterators.
         out: List[PreloadedTopicsGroupIterator] = []
-        for gi, (_ti, is_compressed, _infos, _lens) in enumerate(scoped):
+        for gi, (_ti, is_compressed, _infos, _lens, _gv) in enumerate(scoped):
             index_chunks: List[_codec.IndexChunk] = []
             chunk_msgs: List[List[_MsgIdxWithTopicId]] = []
             chunk_lens: List[List[int]] = []
@@ -343,6 +388,7 @@ class Reader:
         *,
         strategy: Optional[ReadStrategy] = None,
         tail_prefetch: int = 0,
+        video_decodable: bool = False,
     ) -> List[List[SampleResult]]:
         """Floor-message lookup at concrete timestamps per topic.
 
@@ -351,6 +397,10 @@ class Reader:
           - each queries[i].topic must be unique across all i
           - each queries[i].topic must exist in the file's summary
         Violations are aggregated into a single SampleValidationError.
+
+        When video_decodable is True, results for video topics carry a
+        decoder-ready GOP sequence (frames + reset_decoder) and set is_video.
+        See SampleResult. Non-video topics are unaffected.
 
         Returns out[i][j] for queries[i].timestamps[j].
         """
@@ -361,14 +411,39 @@ class Reader:
         _validate_sample_queries(queries, summary)
 
         specs = [SampleSpec(topic=q.topic, timestamps=list(q.timestamps)) for q in queries]
-        hits = _sample(self._source, summary, specs, strategy)
+        hits = _sample(self._source, summary, specs, strategy, video_decodable)
 
         out: List[List[SampleResult]] = []
         for row in hits:
             out.append(
-                [SampleResult(found=h.found, timestamp=h.timestamp, data=h.data) for h in row]
+                [
+                    SampleResult(
+                        found=h.found,
+                        timestamp=h.timestamp,
+                        data=h.data,
+                        is_video=h.is_video,
+                        frames=[
+                            Frame(
+                                timestamp=f.timestamp,
+                                is_key_frame=f.is_key_frame,
+                                data=f.data,
+                            )
+                            for f in h.frames
+                        ],
+                        reset_decoder=h.reset_decoder,
+                    )
+                    for h in row
+                ]
             )
         return out
+
+
+def _is_video_topics_info(ti: _codec.TopicsInfo) -> bool:
+    """Whether the (single) topic in this group was opened with video=True.
+    Video groups always have exactly one topic, so the first suffices."""
+    if not ti.topic_metadatas:
+        return False
+    return bool(ti.topic_metadatas[0].metadata.get("is_video", False))
 
 
 def _validate_sample_queries(queries: List[SampleQuery], summary: _codec.Summary) -> None:

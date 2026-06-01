@@ -39,6 +39,7 @@ def sort_and_filter(
     topic_ids: Set[int],
     start_timestamp: int,
     end_timestamp: int,
+    video_decodable: bool = False,
 ) -> Tuple[List[_MsgIdxWithTopicId], List[int]]:
     """Compute the kept-message list for a single decoded IndexChunk.
 
@@ -47,6 +48,11 @@ def sort_and_filter(
        last one).
     3) Drop messages whose topic_id isn't in topic_ids or whose timestamp is
        outside [start_timestamp, end_timestamp].
+
+    When video_decodable is True, the effective lower bound is snapped back from
+    start_timestamp to the timestamp of the latest key frame whose timestamp is
+    <= start_timestamp within this chunk, so the caller receives a sequence a
+    decoder can consume cold. See key_frame_start.
     """
     total_messages = sum(len(ti.message_indexes) for ti in topic_indexes)
     if total_messages == 0:
@@ -74,17 +80,44 @@ def sort_and_filter(
         )
     sorted_lens[-1] = total_len - sorted_items[-1].message_index.offset_in_chunk
 
+    # For video-decodable groups, snap the lower bound back to the anchoring
+    # key frame so the kept sequence is decodable cold.
+    effective_start = start_timestamp
+    if video_decodable:
+        effective_start = key_frame_start(topic_indexes, start_timestamp)
+
     out_msgs: List[_MsgIdxWithTopicId] = []
     out_lens: List[int] = []
     for i, item in enumerate(sorted_items):
         if item.topic_id not in topic_ids:
             continue
         ts = item.message_index.timestamp
-        if ts < start_timestamp or ts > end_timestamp:
+        if ts < effective_start or ts > end_timestamp:
             continue
         out_msgs.append(item)
         out_lens.append(sorted_lens[i])
     return out_msgs, out_lens
+
+
+def key_frame_start(
+    topic_indexes: List[_codec.TopicIndex], start_timestamp: int
+) -> int:
+    """Timestamp of the latest key frame whose timestamp is <= start_timestamp,
+    or start_timestamp unchanged if no such key frame exists in this chunk.
+
+    Video-decodable groups always hold exactly one topic. key_frame_indexes are
+    ascending positions into that topic's timestamp-ordered message_indexes.
+    """
+    if not topic_indexes:
+        return start_timestamp
+    ti = topic_indexes[0]
+    anchor = start_timestamp
+    for kf_idx in ti.key_frame_indexes:
+        ts = ti.message_indexes[kf_idx].timestamp
+        if ts > start_timestamp:
+            break
+        anchor = ts
+    return anchor
 
 
 def _filter_index_chunks_in_range(
@@ -129,12 +162,14 @@ class TopicsGroupIterator:
         start_timestamp: int,
         end_timestamp: int,
         order: Order,
+        video_decodable: bool = False,
     ) -> None:
         self._source = source
         self._topic_ids = topic_ids
         self._start = start_timestamp
         self._end = end_timestamp
         self._order = order
+        self._video_decodable = video_decodable
         self._is_compressed = bool(
             topics_info.topic_metadatas[0].metadata.get("is_compressed", False)
         ) if topics_info.topic_metadatas else False
@@ -179,6 +214,7 @@ class TopicsGroupIterator:
                 self._topic_ids,
                 self._start,
                 self._end,
+                self._video_decodable,
             )
             self._current_msg = 0
             if self._order == Order.REVERSE_TIME:

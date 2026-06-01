@@ -33,6 +33,7 @@ from ._iter import Order
 from .chunk import ChunkConfig, ChunkThresholdMode
 from .errors import (
     FileTooSmallError,
+    FirstVideoMessageMustBeKeyFrameError,
     InvalidMagicError,
     NamesMetadatasMismatchError,
     NoTopicsToOpenError,
@@ -44,9 +45,14 @@ from .errors import (
     TopicNotOpenedError,
     TopicNotRegisteredError,
     TurbodataError,
+    VideoGroupMustBeSingleTopicError,
+    VideoTopicCannotBeCompressedError,
+    WriteMessageOnVideoTopicError,
+    WriteVideoMessageOnNonVideoTopicError,
 )
 from .reader import (
     DEFAULT_SAMPLE_STRATEGY,
+    Frame,
     Message,
     Reader,
     SampleQuery,
@@ -82,6 +88,7 @@ __all__ = [
     # Sampling
     "SampleQuery",
     "SampleResult",
+    "Frame",
     "DEFAULT_SAMPLE_STRATEGY",
     "lin_space_timestamps",
     # Format types (also returned by Reader.summary())
@@ -106,6 +113,11 @@ __all__ = [
     "InvalidMagicError",
     "FileTooSmallError",
     "SampleValidationError",
+    "VideoGroupMustBeSingleTopicError",
+    "VideoTopicCannotBeCompressedError",
+    "FirstVideoMessageMustBeKeyFrameError",
+    "WriteMessageOnVideoTopicError",
+    "WriteVideoMessageOnNonVideoTopicError",
 ]
 
 __version__ = "0.1.0"
