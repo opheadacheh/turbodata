@@ -1,7 +1,18 @@
 // Public API surface.
 
-export { Reader } from "./reader.js";
-export type { Message, ReaderOptions } from "./reader.js";
+export {
+  Reader,
+  SampleValidationError,
+  DEFAULT_SAMPLE_STRATEGY,
+  linSpaceTimestamps,
+} from "./reader.js";
+export type {
+  Message,
+  ReaderOptions,
+  SampleQuery,
+  SampleResult,
+  SampleOptions,
+} from "./reader.js";
 
 export type { ReadOptions, Order } from "./read_options.js";
 export { MAX_INT64 } from "./read_options.js";

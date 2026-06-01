@@ -12,6 +12,8 @@ import { plan, type Range } from "./read_planner.js";
 import type { ReadOptions } from "./read_options.js";
 import { MAX_INT64 } from "./read_options.js";
 import type { ReadSource } from "./read_source.js";
+import type { ReadStrategy } from "./read_strategy.js";
+import { sampleMessages, type SampleSpec } from "./sample.js";
 import { sortAndFilter, type MessageRef } from "./sort_and_filter.js";
 import {
   FOOTER_LEN,
@@ -37,6 +39,91 @@ export interface Message {
 export interface ReaderOptions {
   /** Override the default fzstd decompressor (e.g. for a WASM zstd build). */
   decompress?: Decompressor;
+}
+
+/**
+ * One sampling request: the floor message of `topic` at each timestamp.
+ * Within `timestamps`, values must be strictly increasing, and the same
+ * `topic` must not appear in more than one query in a single sample() call.
+ */
+export interface SampleQuery {
+  topic: string;
+  /** int64 timestamps; strictly increasing. */
+  timestamps: bigint[];
+}
+
+/**
+ * One returned floor message. out[i][j] corresponds to queries[i].timestamps[j].
+ * `found` is false when there is no message with timestamp <= timestamps[j]
+ * for the topic. `data` is an owned copy, safe to retain.
+ */
+export interface SampleResult {
+  found: boolean;
+  timestamp: bigint;
+  data: Uint8Array;
+}
+
+/** Options for Reader.sample(). */
+export interface SampleOptions {
+  /**
+   * Cost model for the concurrent reads. Defaults to DEFAULT_SAMPLE_STRATEGY,
+   * which is sized for a cloud-object / in-region profile.
+   */
+  strategy?: ReadStrategy;
+  /**
+   * int64. Bytes to read speculatively from the file tail when loading the
+   * summary. Same semantics as ReadOptions.tailPrefetch.
+   */
+  tailPrefetch?: bigint;
+}
+
+/**
+ * Default strategy for Reader.sample when none is supplied. Mirrors the Go and
+ * Python DEFAULT_SAMPLE_STRATEGY (1 MiB coalesce, 4 MiB split, 16-way fanout).
+ */
+export const DEFAULT_SAMPLE_STRATEGY: ReadStrategy = {
+  coalesceGap: 1n << 20n,
+  splitThreshold: 4n << 20n,
+  maxConcurrency: 16,
+};
+
+/**
+ * Aggregated precondition failures from Reader.sample, raised before any data
+ * I/O. `violations` lists every problem found across all queries.
+ */
+export class SampleValidationError extends Error {
+  readonly violations: string[];
+  constructor(violations: string[]) {
+    super(
+      `sample: ${violations.length} validation error(s): ${violations.join("; ")}`,
+    );
+    this.name = "SampleValidationError";
+    this.violations = violations;
+  }
+}
+
+/**
+ * N timestamps starting at `start`, each `stride` apart. Useful for "N samples
+ * at a given frequency from T" patterns. Mirrors Go LinSpaceTimestamps.
+ * Returns [] when count <= 0; throws when stride <= 0 (would break the
+ * strictly-increasing contract on SampleQuery.timestamps).
+ */
+export function linSpaceTimestamps(
+  start: bigint,
+  stride: bigint,
+  count: number,
+): bigint[] {
+  if (count <= 0) {
+    return [];
+  }
+  if (stride <= 0n) {
+    throw new Error("linSpaceTimestamps requires stride > 0");
+  }
+  const out = new Array<bigint>(count);
+  for (let i = 0; i < count; i++) {
+    out[i] = start + BigInt(i) * stride;
+  }
+  return out;
 }
 
 /**
@@ -243,6 +330,37 @@ export class Reader {
     };
 
     return iter;
+  }
+
+  /**
+   * Floor-message lookup at concrete timestamps per topic. For each
+   * (queries[i].topic, queries[i].timestamps[j]) pair, out[i][j] is the
+   * message with the greatest timestamp <= timestamps[j], or found=false when
+   * none exists.
+   *
+   * Preconditions, validated before any data I/O (all violations aggregated
+   * into a single SampleValidationError):
+   *   - each queries[i].timestamps must be strictly increasing
+   *   - each queries[i].topic must be unique across all i
+   *   - each queries[i].topic must exist in the file's summary
+   *
+   * All data I/O runs concurrently under the hood, governed by the strategy.
+   */
+  async sample(
+    queries: SampleQuery[],
+    opts: SampleOptions = {},
+  ): Promise<SampleResult[][]> {
+    const strategy = opts.strategy ?? DEFAULT_SAMPLE_STRATEGY;
+    const summary = await this.summaryWithHint(opts.tailPrefetch ?? 0n);
+    validateSampleQueries(queries, summary);
+
+    const specs: SampleSpec[] = queries.map((q) => ({
+      topic: q.topic,
+      timestamps: q.timestamps,
+    }));
+    // SampleHit and SampleResult are structurally identical; the engine's
+    // hits double as results.
+    return sampleMessages(this.rs, summary, specs, strategy, this.decompress);
   }
 
   // ---- Default path setup ---------------------------------------------
@@ -463,6 +581,49 @@ function magicEquals(a: Uint8Array, b: Uint8Array): boolean {
     }
   }
   return true;
+}
+
+/**
+ * Returns nothing when all preconditions hold; otherwise throws a
+ * SampleValidationError listing every violation (unknown/duplicate topic,
+ * non-strictly-increasing timestamps). Mirrors go validateSampleQueries.
+ */
+function validateSampleQueries(
+  queries: SampleQuery[],
+  summary: Summary,
+): void {
+  const known = new Set<string>();
+  for (const ti of summary.topicsInfos) {
+    for (const tm of ti.topicMetadatas) {
+      known.add(tm.name);
+    }
+  }
+  const seen = new Map<string, number>();
+  const violations: string[] = [];
+  for (let i = 0; i < queries.length; i++) {
+    const q = queries[i]!;
+    if (!known.has(q.topic)) {
+      violations.push(`queries[${i}]: unknown topic "${q.topic}"`);
+    }
+    const prev = seen.get(q.topic);
+    if (prev !== undefined) {
+      violations.push(
+        `queries[${i}]: duplicate topic "${q.topic}" already used by queries[${prev}]`,
+      );
+    } else {
+      seen.set(q.topic, i);
+    }
+    for (let j = 1; j < q.timestamps.length; j++) {
+      if (q.timestamps[j]! <= q.timestamps[j - 1]!) {
+        violations.push(
+          `queries[${i}].timestamps not strictly increasing at position ${j} (${q.timestamps[j]} <= ${q.timestamps[j - 1]})`,
+        );
+      }
+    }
+  }
+  if (violations.length > 0) {
+    throw new SampleValidationError(violations);
+  }
 }
 
 function collectAllTopicNames(summary: Summary): Set<string> {
