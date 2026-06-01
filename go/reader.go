@@ -30,6 +30,10 @@ type Reader struct {
 	renamePrepared bool
 	renameInverse  map[string]string
 	renameErr      error
+
+	// Cached per-topic bounds (exposed name -> bound), computed lazily from
+	// the summary by topicBounds.
+	boundsCache map[string]topicBound
 }
 
 // ReaderOption configures a Reader at construction time.
