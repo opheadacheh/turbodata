@@ -17,6 +17,14 @@ import msgpack
 MAGIC: bytes = b"7URB0"
 FOOTER_LEN: int = 13  # int64 SummaryLen + 5-byte Magic
 
+# Internal per-topic metadata keys used to carry write-format control flags
+# alongside caller-supplied metadata. The __td_ prefix namespaces them away
+# from user keys. META_KEY_COMPRESSED and META_KEY_VIDEO are read back by the
+# reader to drive decompression and video-aware sampling.
+META_KEY_COMPRESSED: str = "__td_is_compressed"
+META_KEY_VIDEO: str = "__td_is_video"
+META_KEY_CHUNK_CONFIG: str = "__td_chunk_config"
+
 _MAX_STRING_LEN: int = 64 * 1024 * 1024
 _MAX_MAP_LEN: int = 64 * 1024 * 1024
 

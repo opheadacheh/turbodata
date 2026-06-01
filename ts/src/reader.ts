@@ -18,6 +18,7 @@ import { sortAndFilter, type MessageRef } from "./sort_and_filter.js";
 import {
   FOOTER_LEN,
   MAGIC,
+  META_KEY_COMPRESSED,
   type IndexChunk,
   type IndexChunkInfo,
   type Summary,
@@ -419,7 +420,7 @@ export class Reader {
         continue;
       }
       const isCompressed =
-        ti.topicMetadatas[0]?.metadata.get("__td_is_compressed") === true;
+        ti.topicMetadatas[0]?.metadata.get(META_KEY_COMPRESSED) === true;
 
       const filteredInfos: IndexChunkInfo[] = [];
       const filteredLens: bigint[] = [];

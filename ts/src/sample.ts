@@ -23,7 +23,7 @@ import { fetchAll } from "./read_fetcher.js";
 import { plan, type Range } from "./read_planner.js";
 import type { ReadSource } from "./read_source.js";
 import type { ReadStrategy } from "./read_strategy.js";
-import type { IndexChunk, Summary, TopicIndex } from "./types.js";
+import { META_KEY_COMPRESSED, type IndexChunk, type Summary, type TopicIndex } from "./types.js";
 
 /** One engine-level query: floor message of `topic` at each `timestamps[j]`. */
 export interface SampleSpec {
@@ -215,7 +215,7 @@ function resolveTopic(qs: QueryState, summary: Summary): void {
         qs.groupIdx = gi;
         qs.topicId = tm.id;
         qs.isCompressed =
-          ti.topicMetadatas[0]!.metadata.get("__td_is_compressed") === true;
+          ti.topicMetadatas[0]!.metadata.get(META_KEY_COMPRESSED) === true;
         return;
       }
     }

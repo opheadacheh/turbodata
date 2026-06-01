@@ -138,16 +138,16 @@ class Writer:
         )
 
         injected = [dict(m) for m in metadatas]
-        injected[0]["__td_chunk_config"] = {
+        injected[0][_codec.META_KEY_CHUNK_CONFIG] = {
             "mode": int(cc.mode),
             "size": int(cc.size),
             "duration": int(cc.duration),
             "count": int(cc.count),
         }
         if compression:
-            injected[0]["__td_is_compressed"] = True
+            injected[0][_codec.META_KEY_COMPRESSED] = True
         if video:
-            injected[0]["__td_is_video"] = True
+            injected[0][_codec.META_KEY_VIDEO] = True
 
         topic_metadatas: List[_codec.TopicMetadata] = []
         self._names_to_ids = {}

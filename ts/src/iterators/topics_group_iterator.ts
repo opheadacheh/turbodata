@@ -6,7 +6,7 @@ import type { Decompressor } from "../compression.js";
 import { BinaryReader, readIndexChunk } from "../io.js";
 import type { ReadSource } from "../read_source.js";
 import { sortAndFilter, type MessageRef } from "../sort_and_filter.js";
-import type { IndexChunkInfo, TopicsInfo } from "../types.js";
+import { META_KEY_COMPRESSED, type IndexChunkInfo, type TopicsInfo } from "../types.js";
 
 export class TopicsGroupIterator {
   private readonly rs: ReadSource;
@@ -47,7 +47,7 @@ export class TopicsGroupIterator {
     this.reverse = args.reverse;
 
     const firstMeta = args.topicsInfo.topicMetadatas[0];
-    const flag = firstMeta?.metadata.get("__td_is_compressed");
+    const flag = firstMeta?.metadata.get(META_KEY_COMPRESSED);
     this.isCompressed = flag === true;
 
     // Time-range filter at the chunk level + compute compressed lengths.
