@@ -90,7 +90,7 @@ class TestVideoTopicOption:
         r = writer_round_trip(setup)
         summary = r.summary()
         meta = summary.topics_infos[0].topic_metadatas[0].metadata
-        assert meta.get("is_video") is True
+        assert meta.get("__td_is_video") is True
 
     def test_compression_and_video_rejected(self):
         w = Writer(io.BytesIO())

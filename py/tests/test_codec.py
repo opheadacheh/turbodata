@@ -92,7 +92,7 @@ class TestMap:
             {"key": "value"},
             {"num": 42},
             {"hello": "world", "foo": 123},
-            {"hz": 100, "encoding": "jpeg", "is_compressed": True},
+            {"hz": 100, "encoding": "jpeg", "__td_is_compressed": True},
             {"nested": {"a": 1, "b": [1, 2, 3]}},
         ],
         ids=["empty", "string_value", "int_value", "mixed", "writer_metadata", "nested"],

@@ -1,5 +1,5 @@
 topics:1
-topic 1 /sensor {"description":"compressed sensor","is_compressed":true}
+topic 1 /sensor {"__td_is_compressed":true,"description":"compressed sensor"}
 messages:30
 stream-sha256:4b8a5d678feb0ee5dbcefb088e0c26d909c9c4186d7713fd41f3b5a79db9af50
 first 2000000 /sensor 26fc9fbadd5a1705727b7d278fb406e2e2562707a4ce1e72c5f6aa489b7cd710

@@ -1,7 +1,7 @@
 topics:3
 topic 1 /groupA/data {"group":"A"}
-topic 2 /groupB/x {"channel":"x","group":"B","is_compressed":true}
-topic 3 /groupB/y {"channel":"y","group":"B","is_compressed":true}
+topic 2 /groupB/x {"__td_is_compressed":true,"channel":"x","group":"B"}
+topic 3 /groupB/y {"__td_is_compressed":true,"channel":"y","group":"B"}
 messages:42
 stream-sha256:f8f94d6868cc05312bce3fff2269180cdd8fa903c4183785675cfaa530af4b5f
 first 4000000 /groupA/data 0b4e4eab4130fd781671344b9969e3b0fe0f3108fdf7aeea2f97c221150f9175

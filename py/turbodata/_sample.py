@@ -146,12 +146,12 @@ def sample(
                     qs.group_idx = gi
                     qs.topic_id = tm.id
                     qs.is_compressed = bool(
-                        ti.topic_metadatas[0].metadata.get("is_compressed", False)
+                        ti.topic_metadatas[0].metadata.get("__td_is_compressed", False)
                     )
                     # Video decoding is opt-in. Without it, a video topic is
                     # sampled like any other topic (its floor frame in data).
                     qs.is_video = video_decodable and bool(
-                        ti.topic_metadatas[0].metadata.get("is_video", False)
+                        ti.topic_metadatas[0].metadata.get("__td_is_video", False)
                     )
                     found = True
                     break

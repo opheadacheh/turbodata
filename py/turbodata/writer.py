@@ -9,9 +9,9 @@ Per-group sequence:
 Repeat for additional groups, then close().
 
 Keyword arguments on open_topics replace the Go SDK's WithChunkConfig and
-WithCompression options. The chunk_config and is_compressed entries are
-also stored in the per-topic metadata map (matching the Go writer), so the
-reader can detect compression without out-of-band state.
+WithCompression options. The __td_chunk_config and __td_is_compressed
+entries are also stored in the per-topic metadata map (matching the Go
+writer), so the reader can detect compression without out-of-band state.
 
 Video topics (open_topics(..., video=True)) carry compressed video frames.
 Callers must use write_video_message (which takes an is_key_frame flag)
@@ -138,16 +138,16 @@ class Writer:
         )
 
         injected = [dict(m) for m in metadatas]
-        injected[0]["chunk_config"] = {
+        injected[0]["__td_chunk_config"] = {
             "mode": int(cc.mode),
             "size": int(cc.size),
             "duration": int(cc.duration),
             "count": int(cc.count),
         }
         if compression:
-            injected[0]["is_compressed"] = True
+            injected[0]["__td_is_compressed"] = True
         if video:
-            injected[0]["is_video"] = True
+            injected[0]["__td_is_video"] = True
 
         topic_metadatas: List[_codec.TopicMetadata] = []
         self._names_to_ids = {}

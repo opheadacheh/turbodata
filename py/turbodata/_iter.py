@@ -171,7 +171,7 @@ class TopicsGroupIterator:
         self._order = order
         self._video_decodable = video_decodable
         self._is_compressed = bool(
-            topics_info.topic_metadatas[0].metadata.get("is_compressed", False)
+            topics_info.topic_metadatas[0].metadata.get("__td_is_compressed", False)
         ) if topics_info.topic_metadatas else False
 
         self._infos, self._info_lens = _filter_index_chunks_in_range(

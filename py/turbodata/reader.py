@@ -294,7 +294,7 @@ class Reader:
             if not any(tm.name in wanted for tm in ti.topic_metadatas):
                 continue
             is_compressed = bool(
-                ti.topic_metadatas[0].metadata.get("is_compressed", False)
+                ti.topic_metadatas[0].metadata.get("__td_is_compressed", False)
             )
             group_video = video_decodable and _is_video_topics_info(ti)
             infos, lens = _filter_index_chunks_in_range(ti, start_ts, end_ts)
@@ -443,7 +443,7 @@ def _is_video_topics_info(ti: _codec.TopicsInfo) -> bool:
     Video groups always have exactly one topic, so the first suffices."""
     if not ti.topic_metadatas:
         return False
-    return bool(ti.topic_metadatas[0].metadata.get("is_video", False))
+    return bool(ti.topic_metadatas[0].metadata.get("__td_is_video", False))
 
 
 def _validate_sample_queries(queries: List[SampleQuery], summary: _codec.Summary) -> None:

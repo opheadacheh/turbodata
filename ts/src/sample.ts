@@ -215,7 +215,7 @@ function resolveTopic(qs: QueryState, summary: Summary): void {
         qs.groupIdx = gi;
         qs.topicId = tm.id;
         qs.isCompressed =
-          ti.topicMetadatas[0]!.metadata.get("is_compressed") === true;
+          ti.topicMetadatas[0]!.metadata.get("__td_is_compressed") === true;
         return;
       }
     }

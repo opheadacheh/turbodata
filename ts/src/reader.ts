@@ -419,7 +419,7 @@ export class Reader {
         continue;
       }
       const isCompressed =
-        ti.topicMetadatas[0]?.metadata.get("is_compressed") === true;
+        ti.topicMetadatas[0]?.metadata.get("__td_is_compressed") === true;
 
       const filteredInfos: IndexChunkInfo[] = [];
       const filteredLens: bigint[] = [];

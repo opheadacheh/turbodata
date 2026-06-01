@@ -47,7 +47,7 @@ export class TopicsGroupIterator {
     this.reverse = args.reverse;
 
     const firstMeta = args.topicsInfo.topicMetadatas[0];
-    const flag = firstMeta?.metadata.get("is_compressed");
+    const flag = firstMeta?.metadata.get("__td_is_compressed");
     this.isCompressed = flag === true;
 
     // Time-range filter at the chunk level + compute compressed lengths.

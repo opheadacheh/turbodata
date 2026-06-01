@@ -240,8 +240,8 @@ class TestCompression:
         w.close_topic()
         w.close()
         summary = Reader(BytesReadSource(buf.getvalue())).summary()
-        # is_compressed is not in metadata if compression=False.
-        assert "is_compressed" not in summary.topics_infos[0].topic_metadatas[0].metadata
+        # __td_is_compressed is not in metadata if compression=False.
+        assert "__td_is_compressed" not in summary.topics_infos[0].topic_metadatas[0].metadata
 
     def test_compression_sets_metadata_flag(self):
         buf = io.BytesIO()
@@ -251,7 +251,7 @@ class TestCompression:
         w.close_topic()
         w.close()
         summary = Reader(BytesReadSource(buf.getvalue())).summary()
-        assert summary.topics_infos[0].topic_metadatas[0].metadata.get("is_compressed") is True
+        assert summary.topics_infos[0].topic_metadatas[0].metadata.get("__td_is_compressed") is True
 
     def test_chunk_config_stored_in_metadata(self):
         cfg = ChunkConfig(mode=ChunkThresholdMode.COUNT, count=3)
@@ -263,8 +263,8 @@ class TestCompression:
         w.close()
         summary = Reader(BytesReadSource(buf.getvalue())).summary()
         meta = summary.topics_infos[0].topic_metadatas[0].metadata
-        assert meta["chunk_config"]["mode"] == int(ChunkThresholdMode.COUNT)
-        assert meta["chunk_config"]["count"] == 3
+        assert meta["__td_chunk_config"]["mode"] == int(ChunkThresholdMode.COUNT)
+        assert meta["__td_chunk_config"]["count"] == 3
 
 
 # ---------------------------------------------------------------------------
