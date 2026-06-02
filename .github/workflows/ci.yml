@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/turbodata/go.mod
+      - name: Build, vet, and test library
+        working-directory: go/turbodata
+        run: |
+          go build ./...
+          go vet ./...
+          go test ./...
+      - name: Build & test consumer modules
+        working-directory: go
+        run: |
+          (cd examples && go build ./... && go vet ./...)
+          (cd benchmark && go build ./... && go vet ./... && go test ./...)
+          (cd cmd && go vet ./... && go build -o /dev/null ./...)
+
+  python:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/turbodata/go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: py/pyproject.toml
+      # Produce the Go demo file so the Python cross-language tests (which read
+      # files written by the Go SDK) actually run instead of skipping.
+      - name: Generate Go cross-language fixture
+        working-directory: go
+        run: go run ./examples/write
+      - name: Install and test
+        working-directory: py
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+          pytest tests/ -q
+
+  typescript:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/turbodata/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ts/package-lock.json
+      # Regenerate fixtures from the Go reference writer and confirm the
+      # deterministic golden files are unchanged. The .td binaries use zstd and
+      # are not byte-reproducible, so only the *.golden.txt files are diffed.
+      - name: Regenerate fixtures and verify goldens
+        working-directory: go
+        run: |
+          go run ./cmd/gen-fixtures -out ../ts/test/fixtures
+          git diff --exit-code -- '../ts/test/fixtures/*.golden.txt'
+      - name: Install, build, and test
+        working-directory: ts
+        run: |
+          npm ci
+          npm run build
+          npm test

@@ -1,5 +1,8 @@
 # turbodata
 
+[![CI](https://github.com/opheadacheh/turbodata/actions/workflows/ci.yml/badge.svg)](https://github.com/opheadacheh/turbodata/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/turbodata)](https://pypi.org/project/turbodata/)
+[![npm](https://img.shields.io/npm/v/turbodata)](https://www.npmjs.com/package/turbodata)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
 **turbodata** is a container format for storing multi-topic, timestamped

@@ -1,0 +1,48 @@
+name: Bug report
+description: Report a bug in one of the turbodata SDKs.
+labels: [bug]
+body:
+  - type: dropdown
+    id: sdk
+    attributes:
+      label: SDK
+      description: Which SDK is affected?
+      options:
+        - Go
+        - Python
+        - TypeScript
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Which version of the SDK are you using?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Minimal steps or code to reproduce the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: false
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and language runtime version (e.g. Go 1.26, Python 3.12, Node 20).
+    validations:
+      required: false

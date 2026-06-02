@@ -1,0 +1,36 @@
+name: Feature request
+description: Suggest an idea or improvement for turbodata.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What problem are you trying to solve? Why does it matter?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+    validations:
+      required: false
+  - type: dropdown
+    id: sdks
+    attributes:
+      label: Which SDK(s)
+      description: Which SDK(s) would this affect?
+      multiple: true
+      options:
+        - Go
+        - Python
+        - TypeScript
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other approaches you considered.
+    validations:
+      required: false

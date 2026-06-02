@@ -1,0 +1,33 @@
+name: Publish npm
+
+# Triggered by pushing a `ts-vX.Y.Z` tag. Requires the repository secret
+# `NPM_TOKEN` (an npm automation access token). `id-token: write` enables
+# npm package provenance.
+
+on:
+  push:
+    tags: ["ts-v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Build and publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: https://registry.npmjs.org
+      - name: Install, build, test, and publish
+        working-directory: ts
+        run: |
+          npm ci
+          npm run build
+          npm test
+          npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
