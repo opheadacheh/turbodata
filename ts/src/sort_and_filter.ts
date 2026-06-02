@@ -26,6 +26,7 @@ export function sortAndFilter(
   topicIds: Set<number>,
   startTimestamp: bigint,
   endTimestamp: bigint,
+  videoDecodable = false,
 ): { msgs: MessageRef[]; lens: bigint[] } {
   let total = 0;
   for (const ti of topicIndexes) {
@@ -79,6 +80,13 @@ export function sortAndFilter(
   allLens[allLens.length - 1] =
     totalLen - sorted[sorted.length - 1]!.mi.offsetInChunk;
 
+  // For video-decodable groups, snap the lower bound back to the anchoring
+  // key frame so the kept sequence is decodable cold.
+  let effectiveStart = startTimestamp;
+  if (videoDecodable) {
+    effectiveStart = keyFrameStart(topicIndexes, startTimestamp);
+  }
+
   // Filter by topic + timestamp range.
   const msgs: MessageRef[] = [];
   const lens: bigint[] = [];
@@ -88,7 +96,7 @@ export function sortAndFilter(
       continue;
     }
     const ts = item.mi.timestamp;
-    if (ts < startTimestamp || ts > endTimestamp) {
+    if (ts < effectiveStart || ts > endTimestamp) {
       continue;
     }
     msgs.push({
@@ -99,6 +107,33 @@ export function sortAndFilter(
     lens.push(allLens[i]!);
   }
   return { msgs, lens };
+}
+
+/**
+ * Timestamp of the latest key frame whose timestamp is <= startTimestamp, or
+ * startTimestamp unchanged if no such key frame exists in this chunk. Mirrors
+ * py key_frame_start / go keyFrameStart.
+ *
+ * Video-decodable groups always hold exactly one topic. keyFrameIndexes are
+ * ascending positions into that topic's timestamp-ordered messageIndexes.
+ */
+export function keyFrameStart(
+  topicIndexes: TopicIndex[],
+  startTimestamp: bigint,
+): bigint {
+  if (topicIndexes.length === 0) {
+    return startTimestamp;
+  }
+  const ti = topicIndexes[0]!;
+  let anchor = startTimestamp;
+  for (const kfIdx of ti.keyFrameIndexes) {
+    const ts = ti.messageIndexes[kfIdx]!.timestamp;
+    if (ts > startTimestamp) {
+      break;
+    }
+    anchor = ts;
+  }
+  return anchor;
 }
 
 /** Convenience: sort+filter directly from a decoded IndexChunk. */

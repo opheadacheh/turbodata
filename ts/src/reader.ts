@@ -19,6 +19,7 @@ import {
   FOOTER_LEN,
   MAGIC,
   META_KEY_COMPRESSED,
+  META_KEY_VIDEO,
   type IndexChunk,
   type IndexChunkInfo,
   type Summary,
@@ -54,14 +55,45 @@ export interface SampleQuery {
 }
 
 /**
+ * One coded video frame surfaced as part of a SampleResult's GOP prefix or
+ * incremental tail. `data` is an owned copy and is safe to retain.
+ */
+export interface Frame {
+  timestamp: bigint;
+  isKeyFrame: boolean;
+  data: Uint8Array;
+}
+
+/**
  * One returned floor message. out[i][j] corresponds to queries[i].timestamps[j].
  * `found` is false when there is no message with timestamp <= timestamps[j]
- * for the topic. `data` is an owned copy, safe to retain.
+ * for the topic.
+ *
+ * Without videoDecodable, every topic (including video topics) returns its
+ * floor message in `data` (an owned copy), `isVideo` is false, and `frames` /
+ * `resetDecoder` are unset.
+ *
+ * With videoDecodable, results for video topics instead carry a decoder-ready
+ * GOP sequence and set `isVideo` true. For those results, within a single row
+ * (one topic, strictly increasing query timestamps):
+ *
+ *   - `data` is empty; the frame bytes live in `frames` and the target frame
+ *     is the last element. `timestamp` names that target frame.
+ *   - For the first found result in each GOP encountered in the row:
+ *     `resetDecoder` is true, `frames` = [keyframe ... target] in storage
+ *     (decode) order. The decoder must reset before feeding.
+ *   - For subsequent found results within the same GOP: `resetDecoder` is
+ *     false, `frames` = [previous_target+1 ... target] (only the new frames).
+ *     `frames` is empty when two queries resolve to the same target frame;
+ *     `timestamp` still names that target.
  */
 export interface SampleResult {
   found: boolean;
   timestamp: bigint;
   data: Uint8Array;
+  isVideo: boolean;
+  frames: Frame[];
+  resetDecoder: boolean;
 }
 
 /** Options for Reader.sample(). */
@@ -76,6 +108,12 @@ export interface SampleOptions {
    * summary. Same semantics as ReadOptions.tailPrefetch.
    */
   tailPrefetch?: bigint;
+  /**
+   * When true, results for video topics carry a decoder-ready GOP sequence
+   * (frames + resetDecoder) and set isVideo. See SampleResult. Non-video
+   * topics are unaffected. Default: false.
+   */
+  videoDecodable?: boolean;
 }
 
 /**
@@ -223,6 +261,7 @@ export class Reader {
     const wantedNames = opts.topicNames;
     const strategy = opts.strategy;
     const copy = opts.copy === true;
+    const videoDecodable = opts.videoDecodable === true;
 
     let initialized = false;
     let exhausted = false;
@@ -265,6 +304,7 @@ export class Reader {
           endTimestamp,
           reverse,
           strategy,
+          videoDecodable,
         });
       } else {
         groupIts = reader.prepareDefault({
@@ -274,6 +314,7 @@ export class Reader {
           startTimestamp,
           endTimestamp,
           reverse,
+          videoDecodable,
         });
       }
 
@@ -352,6 +393,7 @@ export class Reader {
     opts: SampleOptions = {},
   ): Promise<SampleResult[][]> {
     const strategy = opts.strategy ?? DEFAULT_SAMPLE_STRATEGY;
+    const videoDecodable = opts.videoDecodable === true;
     const summary = await this.summaryWithHint(opts.tailPrefetch ?? 0n);
     validateSampleQueries(queries, summary);
 
@@ -361,7 +403,14 @@ export class Reader {
     }));
     // SampleHit and SampleResult are structurally identical; the engine's
     // hits double as results.
-    return sampleMessages(this.rs, summary, specs, strategy, this.decompress);
+    return sampleMessages(
+      this.rs,
+      summary,
+      specs,
+      strategy,
+      this.decompress,
+      videoDecodable,
+    );
   }
 
   // ---- Default path setup ---------------------------------------------
@@ -373,6 +422,7 @@ export class Reader {
     startTimestamp: bigint;
     endTimestamp: bigint;
     reverse: boolean;
+    videoDecodable: boolean;
   }): GroupIt[] {
     const out: GroupIt[] = [];
     for (const ti of args.summary.topicsInfos) {
@@ -388,6 +438,7 @@ export class Reader {
         endTimestamp: args.endTimestamp,
         reverse: args.reverse,
         topicsInfo: ti,
+        videoDecodable: args.videoDecodable && isVideoTopicsInfo(ti),
       });
       if (!it.hasAny()) {
         continue;
@@ -407,10 +458,12 @@ export class Reader {
     endTimestamp: bigint;
     reverse: boolean;
     strategy: import("./read_strategy.js").ReadStrategy;
+    videoDecodable: boolean;
   }): Promise<GroupIt[]> {
     interface ScopedGroup {
       topicsInfo: TopicsInfo;
       isCompressed: boolean;
+      groupVideo: boolean;
       filteredInfos: IndexChunkInfo[];
       filteredInfoLs: bigint[];
     }
@@ -421,6 +474,7 @@ export class Reader {
       }
       const isCompressed =
         ti.topicMetadatas[0]?.metadata.get(META_KEY_COMPRESSED) === true;
+      const groupVideo = args.videoDecodable && isVideoTopicsInfo(ti);
 
       const filteredInfos: IndexChunkInfo[] = [];
       const filteredLens: bigint[] = [];
@@ -447,6 +501,7 @@ export class Reader {
       scoped.push({
         topicsInfo: ti,
         isCompressed,
+        groupVideo,
         filteredInfos,
         filteredInfoLs: filteredLens,
       });
@@ -493,6 +548,7 @@ export class Reader {
           args.topicIds,
           args.startTimestamp,
           args.endTimestamp,
+          g.groupVideo,
         );
         perGroupChunks[gi]!.push({
           indexChunk: ic,
@@ -644,4 +700,13 @@ function groupHasAnyOf(ti: TopicsInfo, names: Set<string>): boolean {
     }
   }
   return false;
+}
+
+/**
+ * Whether the (single) topic in this group was opened with video=true. Video
+ * groups always have exactly one topic, so the first metadata suffices.
+ * Mirrors py _is_video_topics_info.
+ */
+function isVideoTopicsInfo(ti: TopicsInfo): boolean {
+  return ti.topicMetadatas[0]?.metadata.get(META_KEY_VIDEO) === true;
 }

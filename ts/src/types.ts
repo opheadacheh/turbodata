@@ -60,7 +60,10 @@ export interface TopicIndex {
   /** uint16 */
   id: number;
   messageIndexes: MessageIndex[];
-  /** uint32 entries. Reserved for video keyframe info; not consumed today. */
+  /**
+   * uint32 entries: ascending positions into `messageIndexes` marking key
+   * frames. Consumed by the video-decodable read/sample paths to anchor GOPs.
+   */
   keyFrameIndexes: Uint32Array;
 }
 

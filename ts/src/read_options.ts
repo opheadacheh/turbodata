@@ -31,6 +31,13 @@ export interface ReadOptions {
    * reusable buffer that becomes invalid on the next iteration step.
    */
   copy?: boolean;
+  /**
+   * If true, for any video topic in scope the effective per-group
+   * startTimestamp is snapped back to the latest key frame whose timestamp is
+   * <= startTimestamp, so the emitted sequence can be fed to a decoder cold.
+   * Non-video topics are unaffected. Default: false.
+   */
+  videoDecodable?: boolean;
 }
 
 /** Default value for endTimestamp: matches Go's math.MaxInt64. */

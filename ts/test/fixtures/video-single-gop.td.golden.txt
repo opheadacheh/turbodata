@@ -1,0 +1,6 @@
+topics:1
+topic 1 /cam {"__td_is_video":true,"codec":"h264"}
+messages:6
+stream-sha256:6610dc8c0aeea75f6f0c00b77cfdab92a8faa63e52fd0a52aee545f45d1678c9
+first 10 /cam d35bf04fff57f1fcff97760c220f8667f6756ed58ed7a4694256b76e997b962e
+last 60 /cam b9a9d9116f168ecdfec94e9b85cefdb2c54ce1b0a2d16d70fd59e5f0065ce4cf

@@ -62,6 +62,9 @@ func main() {
 		{name: "single-topic-compressed", build: buildSingleTopicCompressed},
 		{name: "multi-topic-compressed", build: buildMultiTopicCompressed},
 		{name: "multi-group-mixed", build: buildMultiGroupMixed},
+		{name: "video-single-gop", build: buildVideoSingleGOP},
+		{name: "video-multi-gop-chunks", build: buildVideoMultiGOPChunks},
+		{name: "video-multi-gop-one-chunk", build: buildVideoMultiGOPOneChunk},
 	}
 
 	for _, s := range specs {
@@ -217,6 +220,108 @@ func buildMultiGroupMixed(w *turbodata.Writer) error {
 		}
 	}
 	return w.CloseTopic()
+}
+
+// --------- video fixture builders ---------
+//
+// Video fixtures exercise the video-decodable read/sample paths in the TS SDK.
+// Each frame's payload encodes its label so the TS test can assert exact
+// frame bytes against a hardcoded layout (mirrors the Go/Python video tests).
+//
+// The single topic is "/cam", opened WithVideoTopic (so its metadata carries
+// __td_is_video=true). Frames are written via WriteVideoMessage.
+
+type videoFrame struct {
+	ts         int64
+	isKeyFrame bool
+	data       string
+}
+
+func writeVideoFrames(w *turbodata.Writer, frames []videoFrame) error {
+	for _, f := range frames {
+		if err := w.WriteVideoMessage("/cam", []byte(f.data), f.ts, f.isKeyFrame); err != nil {
+			return err
+		}
+	}
+	return w.CloseTopic()
+}
+
+// One GOP of 6 frames in a single chunk (default size-based chunking):
+//
+//	K@10, P@20, P@30, P@40, P@50, P@60
+//
+// Drives single-query GOP prefix, exact-keyframe queries, incremental
+// same-GOP sampling, same-target dedup, before-first-keyframe, and
+// single-chunk snap-back.
+func buildVideoSingleGOP(w *turbodata.Writer) error {
+	if err := w.OpenTopics(
+		[]string{"/cam"},
+		[]map[string]any{{"codec": "h264"}},
+		turbodata.WithVideoTopic(),
+	); err != nil {
+		return err
+	}
+	return writeVideoFrames(w, []videoFrame{
+		{10, true, "K10"},
+		{20, false, "P20"},
+		{30, false, "P30"},
+		{40, false, "P40"},
+		{50, false, "P50"},
+		{60, false, "P60"},
+	})
+}
+
+// Two GOPs forced into separate chunks via a 1-byte size threshold (the
+// writer flushes at every key frame except the first):
+//
+//	chunk 0: KA@10, A1@20, A2@30
+//	chunk 1: KB@40, B1@50, B2@60
+//
+// Drives sample queries spanning two GOPs and cross-chunk snap-back.
+func buildVideoMultiGOPChunks(w *turbodata.Writer) error {
+	if err := w.OpenTopics(
+		[]string{"/cam"},
+		[]map[string]any{{"codec": "h264"}},
+		turbodata.WithChunkConfig(&turbodata.ChunkConfig{
+			Mode: turbodata.ChunkThresholdModeSize,
+			Size: 1,
+		}),
+		turbodata.WithVideoTopic(),
+	); err != nil {
+		return err
+	}
+	return writeVideoFrames(w, []videoFrame{
+		{10, true, "KA"},
+		{20, false, "A1"},
+		{30, false, "A2"},
+		{40, true, "KB"},
+		{50, false, "B1"},
+		{60, false, "B2"},
+	})
+}
+
+// Three GOPs living in a single chunk (default chunking):
+//
+//	KA@10, A1@20, KB@30, B1@40, KC@50, C1@60
+//
+// Drives snap-back that must land on the correct GOP within one chunk (not
+// the chunk's first key frame).
+func buildVideoMultiGOPOneChunk(w *turbodata.Writer) error {
+	if err := w.OpenTopics(
+		[]string{"/cam"},
+		[]map[string]any{{"codec": "h264"}},
+		turbodata.WithVideoTopic(),
+	); err != nil {
+		return err
+	}
+	return writeVideoFrames(w, []videoFrame{
+		{10, true, "KA"},
+		{20, false, "A1"},
+		{30, true, "KB"},
+		{40, false, "B1"},
+		{50, true, "KC"},
+		{60, false, "C1"},
+	})
 }
 
 func mkPayload(seed int) string {

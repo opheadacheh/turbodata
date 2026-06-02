@@ -16,6 +16,7 @@ export class TopicsGroupIterator {
   private readonly endTimestamp: bigint;
   private readonly reverse: boolean;
   private readonly isCompressed: boolean;
+  private readonly videoDecodable: boolean;
 
   // Per-chunk metadata.
   private readonly indexChunkInfoList: IndexChunkInfo[];
@@ -38,6 +39,8 @@ export class TopicsGroupIterator {
     endTimestamp: bigint;
     reverse: boolean;
     topicsInfo: TopicsInfo;
+    /** When true, snap the per-chunk lower bound back to the GOP key frame. */
+    videoDecodable?: boolean;
   }) {
     this.rs = args.rs;
     this.decompress = args.decompress;
@@ -45,6 +48,7 @@ export class TopicsGroupIterator {
     this.startTimestamp = args.startTimestamp;
     this.endTimestamp = args.endTimestamp;
     this.reverse = args.reverse;
+    this.videoDecodable = args.videoDecodable === true;
 
     const firstMeta = args.topicsInfo.topicMetadatas[0];
     const flag = firstMeta?.metadata.get(META_KEY_COMPRESSED);
@@ -142,6 +146,7 @@ export class TopicsGroupIterator {
       this.topicIds,
       this.startTimestamp,
       this.endTimestamp,
+      this.videoDecodable,
     );
     this.currentMessages = filtered.msgs;
     this.currentLens = filtered.lens;
