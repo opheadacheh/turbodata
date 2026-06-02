@@ -14,7 +14,7 @@
 
 package turbodata
 
-import "github.com/opheadacheh/turbodata/go/format"
+import "github.com/opheadacheh/turbodata/go/turbodata/format"
 
 type WriteOption func(metadata map[string]any) error
 

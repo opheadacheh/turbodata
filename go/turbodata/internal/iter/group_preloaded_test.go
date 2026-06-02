@@ -19,9 +19,9 @@ import (
 	"io"
 	"testing"
 
-	"github.com/opheadacheh/turbodata/go/format"
-	"github.com/opheadacheh/turbodata/go/internal/compress"
-	"github.com/opheadacheh/turbodata/go/internal/iorange"
+	"github.com/opheadacheh/turbodata/go/turbodata/format"
+	"github.com/opheadacheh/turbodata/go/turbodata/internal/compress"
+	"github.com/opheadacheh/turbodata/go/turbodata/internal/iorange"
 )
 
 func collectGroup(t *testing.T, it *preloadedTopicsGroupIterator) []testMsg {

@@ -14,7 +14,7 @@
 
 package turbodata
 
-import "github.com/opheadacheh/turbodata/go/internal/buffer"
+import "github.com/opheadacheh/turbodata/go/turbodata/internal/buffer"
 
 // ReusableBuffer is a growable byte buffer designed to be reused across calls
 // to MessageIterator.NextInto, avoiding per-message allocations.

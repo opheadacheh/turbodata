@@ -20,9 +20,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/opheadacheh/turbodata/go/format"
-	"github.com/opheadacheh/turbodata/go/internal/compress"
-	"github.com/opheadacheh/turbodata/go/internal/iter"
+	"github.com/opheadacheh/turbodata/go/turbodata/format"
+	"github.com/opheadacheh/turbodata/go/turbodata/internal/compress"
+	"github.com/opheadacheh/turbodata/go/turbodata/internal/iter"
 )
 
 type Reader struct {

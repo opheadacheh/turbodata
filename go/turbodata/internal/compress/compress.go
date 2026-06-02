@@ -17,7 +17,7 @@ package compress
 import (
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/opheadacheh/turbodata/go/internal/buffer"
+	"github.com/opheadacheh/turbodata/go/turbodata/internal/buffer"
 )
 
 // encoder and decoder are package-level singletons. EncodeAll/DecodeAll

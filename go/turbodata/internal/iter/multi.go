@@ -19,7 +19,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/opheadacheh/turbodata/go/internal/buffer"
+	"github.com/opheadacheh/turbodata/go/turbodata/internal/buffer"
 )
 
 // multiEntry is one in-flight head from a sub-iterator. The message bytes are

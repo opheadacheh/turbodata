@@ -18,8 +18,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/opheadacheh/turbodata/go/format"
-	"github.com/opheadacheh/turbodata/go/internal/iter"
+	"github.com/opheadacheh/turbodata/go/turbodata/format"
+	"github.com/opheadacheh/turbodata/go/turbodata/internal/iter"
 )
 
 // SampleQuery requests floor messages from a single topic at the given

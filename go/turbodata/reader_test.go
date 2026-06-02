@@ -23,8 +23,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/opheadacheh/turbodata/go/format"
-	"github.com/opheadacheh/turbodata/go/internal/compress"
+	"github.com/opheadacheh/turbodata/go/turbodata/format"
+	"github.com/opheadacheh/turbodata/go/turbodata/internal/compress"
 )
 
 func makeReaderFixture(t *testing.T, body []byte, compressedSummary []byte, footer *format.Footer) ReadSource {

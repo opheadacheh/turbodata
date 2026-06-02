@@ -15,8 +15,8 @@
 package turbodata
 
 import (
-	"github.com/opheadacheh/turbodata/go/internal/iter"
-	"github.com/opheadacheh/turbodata/go/readstrategy"
+	"github.com/opheadacheh/turbodata/go/turbodata/internal/iter"
+	"github.com/opheadacheh/turbodata/go/turbodata/readstrategy"
 )
 
 // ReadOption configures a read invocation. The underlying parameter type is

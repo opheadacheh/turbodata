@@ -14,7 +14,7 @@
 
 package turbodata
 
-import "github.com/opheadacheh/turbodata/go/internal/iter"
+import "github.com/opheadacheh/turbodata/go/turbodata/internal/iter"
 
 // ReadSource is the combined I/O capability the Reader expects from its
 // underlying storage. It is satisfied natively by *os.File and *bytes.Reader.

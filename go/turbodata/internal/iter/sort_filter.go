@@ -18,7 +18,7 @@ import (
 	"container/heap"
 	"sync"
 
-	"github.com/opheadacheh/turbodata/go/format"
+	"github.com/opheadacheh/turbodata/go/turbodata/format"
 )
 
 // sortAndFilterMergeScratch bundles the reusable working state for

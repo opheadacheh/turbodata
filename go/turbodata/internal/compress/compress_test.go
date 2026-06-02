@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/opheadacheh/turbodata/go/internal/buffer"
+	"github.com/opheadacheh/turbodata/go/turbodata/internal/buffer"
 )
 
 func TestCompressDecompressRoundTrip(t *testing.T) {

@@ -18,9 +18,9 @@ import (
 	"bytes"
 	"io"
 
-	"github.com/opheadacheh/turbodata/go/format"
-	"github.com/opheadacheh/turbodata/go/internal/buffer"
-	"github.com/opheadacheh/turbodata/go/internal/compress"
+	"github.com/opheadacheh/turbodata/go/turbodata/format"
+	"github.com/opheadacheh/turbodata/go/turbodata/internal/buffer"
+	"github.com/opheadacheh/turbodata/go/turbodata/internal/compress"
 )
 
 type TopicsGroupIterator struct {

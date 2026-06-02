@@ -14,7 +14,7 @@
 
 package iter
 
-import "github.com/opheadacheh/turbodata/go/format"
+import "github.com/opheadacheh/turbodata/go/turbodata/format"
 
 type messageIndexWithTopicId struct {
 	topicId      uint16

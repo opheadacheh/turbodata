@@ -18,7 +18,7 @@ import (
 	"container/heap"
 	"testing"
 
-	"github.com/opheadacheh/turbodata/go/format"
+	"github.com/opheadacheh/turbodata/go/turbodata/format"
 )
 
 func TestMessageIndexHeap(t *testing.T) {

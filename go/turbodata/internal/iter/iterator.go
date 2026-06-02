@@ -22,11 +22,11 @@ import (
 	"io"
 	"math"
 
-	"github.com/opheadacheh/turbodata/go/format"
-	"github.com/opheadacheh/turbodata/go/internal/buffer"
-	"github.com/opheadacheh/turbodata/go/internal/compress"
-	"github.com/opheadacheh/turbodata/go/internal/iorange"
-	"github.com/opheadacheh/turbodata/go/readstrategy"
+	"github.com/opheadacheh/turbodata/go/turbodata/format"
+	"github.com/opheadacheh/turbodata/go/turbodata/internal/buffer"
+	"github.com/opheadacheh/turbodata/go/turbodata/internal/compress"
+	"github.com/opheadacheh/turbodata/go/turbodata/internal/iorange"
+	"github.com/opheadacheh/turbodata/go/turbodata/readstrategy"
 )
 
 // MessageIterator drives reads across all in-scope topic groups, merging them
