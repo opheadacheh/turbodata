@@ -115,9 +115,18 @@ each SDK's README for the language-specific API.
 
 ## Documentation
 
+- **[Format specification](./FORMAT.md)** — the precise on-disk layout (what makes files cross-SDK compatible).
+- **[Design notes](./DESIGN.md)** — why the format is shaped the way it is, target scenarios, and trade-offs.
+
+SDK guides:
+
 - **Go** — [`go/turbodata/README.md`](./go/turbodata/README.md) · runnable examples in [`go/examples/`](./go/examples)
 - **Python** — [`py/README.md`](./py/README.md) · runnable examples in [`py/examples/`](./py/examples)
 - **TypeScript** — [`ts/README.md`](./ts/README.md)
+
+Rendered HTML versions of the spec and design notes live in [`docs/`](./docs)
+(`docs/format.html`, `docs/design.html`); regenerate them with `python docs/build.py`
+(see the script header for dependencies).
 
 ## Repository layout
 

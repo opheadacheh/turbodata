@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design Notes · turbodata</title>
+<style>
+:root {
+  --fg: #1f2328; --muted: #59636e; --bg: #ffffff; --soft: #f6f8fa;
+  --border: #d1d9e0; --accent: #0969da; --code-bg: #f6f8fa;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; color: var(--fg); background: var(--bg);
+  font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+header.topbar {
+  position: sticky; top: 0; z-index: 10; background: var(--bg);
+  border-bottom: 1px solid var(--border); padding: 12px 24px;
+  display: flex; align-items: center; gap: 20px;
+}
+header.topbar .brand { font-weight: 700; font-size: 18px; }
+header.topbar nav { display: flex; gap: 16px; flex-wrap: wrap; }
+.layout { display: flex; max-width: 1180px; margin: 0 auto; }
+aside.toc {
+  flex: 0 0 240px; padding: 28px 16px; position: sticky; top: 49px;
+  align-self: flex-start; max-height: calc(100vh - 49px); overflow: auto;
+  font-size: 14px; border-right: 1px solid var(--border);
+}
+aside.toc ul { list-style: none; padding-left: 14px; margin: 4px 0; }
+aside.toc > ul { padding-left: 0; }
+aside.toc a { color: var(--muted); display: block; padding: 2px 0; }
+aside.toc a:hover { color: var(--accent); }
+main { flex: 1 1 auto; min-width: 0; padding: 28px 36px; max-width: 820px; }
+main h1 { font-size: 30px; padding-bottom: .3em; border-bottom: 1px solid var(--border); }
+main h2 { font-size: 23px; margin-top: 2em; padding-bottom: .3em; border-bottom: 1px solid var(--border); }
+main h3 { font-size: 18px; margin-top: 1.6em; }
+code, pre, kbd { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+:not(pre) > code {
+  background: var(--code-bg); padding: .15em .35em; border-radius: 5px; font-size: 85%;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px 16px; overflow: auto; font-size: 85%; line-height: 1.45;
+}
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; display: block; overflow: auto; }
+th, td { border: 1px solid var(--border); padding: 7px 13px; text-align: left; }
+th { background: var(--soft); }
+tr:nth-child(2n) td { background: var(--soft); }
+blockquote {
+  margin: 1em 0; padding: 0 1em; color: var(--muted);
+  border-left: .25em solid var(--border);
+}
+.headerlink { visibility: hidden; margin-left: .35em; font-size: .8em; }
+h1:hover .headerlink, h2:hover .headerlink, h3:hover .headerlink { visibility: visible; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 2em 0; }
+footer.pagefoot { max-width: 1180px; margin: 0 auto; padding: 24px 36px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--border); }
+@media (max-width: 900px) { aside.toc { display: none; } main { padding: 20px; } }
+</style>
+<style>pre { line-height: 125%; }
+td.linenos .normal { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+.codehilite .hll { background-color: #ffffcc }
+.codehilite { background: #f8f8f8; }
+.codehilite .c { color: #3D7B7B; font-style: italic } /* Comment */
+.codehilite .err { border: 1px solid #F00 } /* Error */
+.codehilite .k { color: #008000; font-weight: bold } /* Keyword */
+.codehilite .o { color: #666 } /* Operator */
+.codehilite .ch { color: #3D7B7B; font-style: italic } /* Comment.Hashbang */
+.codehilite .cm { color: #3D7B7B; font-style: italic } /* Comment.Multiline */
+.codehilite .cp { color: #9C6500 } /* Comment.Preproc */
+.codehilite .cpf { color: #3D7B7B; font-style: italic } /* Comment.PreprocFile */
+.codehilite .c1 { color: #3D7B7B; font-style: italic } /* Comment.Single */
+.codehilite .cs { color: #3D7B7B; font-style: italic } /* Comment.Special */
+.codehilite .gd { color: #A00000 } /* Generic.Deleted */
+.codehilite .ge { font-style: italic } /* Generic.Emph */
+.codehilite .ges { font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+.codehilite .gr { color: #E40000 } /* Generic.Error */
+.codehilite .gh { color: #000080; font-weight: bold } /* Generic.Heading */
+.codehilite .gi { color: #008400 } /* Generic.Inserted */
+.codehilite .go { color: #717171 } /* Generic.Output */
+.codehilite .gp { color: #000080; font-weight: bold } /* Generic.Prompt */
+.codehilite .gs { font-weight: bold } /* Generic.Strong */
+.codehilite .gu { color: #800080; font-weight: bold } /* Generic.Subheading */
+.codehilite .gt { color: #04D } /* Generic.Traceback */
+.codehilite .kc { color: #008000; font-weight: bold } /* Keyword.Constant */
+.codehilite .kd { color: #008000; font-weight: bold } /* Keyword.Declaration */
+.codehilite .kn { color: #008000; font-weight: bold } /* Keyword.Namespace */
+.codehilite .kp { color: #008000 } /* Keyword.Pseudo */
+.codehilite .kr { color: #008000; font-weight: bold } /* Keyword.Reserved */
+.codehilite .kt { color: #B00040 } /* Keyword.Type */
+.codehilite .m { color: #666 } /* Literal.Number */
+.codehilite .s { color: #BA2121 } /* Literal.String */
+.codehilite .na { color: #687822 } /* Name.Attribute */
+.codehilite .nb { color: #008000 } /* Name.Builtin */
+.codehilite .nc { color: #00F; font-weight: bold } /* Name.Class */
+.codehilite .no { color: #800 } /* Name.Constant */
+.codehilite .nd { color: #A2F } /* Name.Decorator */
+.codehilite .ni { color: #717171; font-weight: bold } /* Name.Entity */
+.codehilite .ne { color: #CB3F38; font-weight: bold } /* Name.Exception */
+.codehilite .nf { color: #00F } /* Name.Function */
+.codehilite .nl { color: #767600 } /* Name.Label */
+.codehilite .nn { color: #00F; font-weight: bold } /* Name.Namespace */
+.codehilite .nt { color: #008000; font-weight: bold } /* Name.Tag */
+.codehilite .nv { color: #19177C } /* Name.Variable */
+.codehilite .ow { color: #A2F; font-weight: bold } /* Operator.Word */
+.codehilite .w { color: #BBB } /* Text.Whitespace */
+.codehilite .mb { color: #666 } /* Literal.Number.Bin */
+.codehilite .mf { color: #666 } /* Literal.Number.Float */
+.codehilite .mh { color: #666 } /* Literal.Number.Hex */
+.codehilite .mi { color: #666 } /* Literal.Number.Integer */
+.codehilite .mo { color: #666 } /* Literal.Number.Oct */
+.codehilite .sa { color: #BA2121 } /* Literal.String.Affix */
+.codehilite .sb { color: #BA2121 } /* Literal.String.Backtick */
+.codehilite .sc { color: #BA2121 } /* Literal.String.Char */
+.codehilite .dl { color: #BA2121 } /* Literal.String.Delimiter */
+.codehilite .sd { color: #BA2121; font-style: italic } /* Literal.String.Doc */
+.codehilite .s2 { color: #BA2121 } /* Literal.String.Double */
+.codehilite .se { color: #AA5D1F; font-weight: bold } /* Literal.String.Escape */
+.codehilite .sh { color: #BA2121 } /* Literal.String.Heredoc */
+.codehilite .si { color: #A45A77; font-weight: bold } /* Literal.String.Interpol */
+.codehilite .sx { color: #008000 } /* Literal.String.Other */
+.codehilite .sr { color: #A45A77 } /* Literal.String.Regex */
+.codehilite .s1 { color: #BA2121 } /* Literal.String.Single */
+.codehilite .ss { color: #19177C } /* Literal.String.Symbol */
+.codehilite .bp { color: #008000 } /* Name.Builtin.Pseudo */
+.codehilite .fm { color: #00F } /* Name.Function.Magic */
+.codehilite .vc { color: #19177C } /* Name.Variable.Class */
+.codehilite .vg { color: #19177C } /* Name.Variable.Global */
+.codehilite .vi { color: #19177C } /* Name.Variable.Instance */
+.codehilite .vm { color: #19177C } /* Name.Variable.Magic */
+.codehilite .il { color: #666 } /* Literal.Number.Integer.Long */</style>
+</head>
+<body>
+<header class="topbar">
+  <span class="brand"><a href="index.html">turbodata</a></span>
+  <nav><a href="index.html">Home</a><a href="format.html">Format Spec</a><a href="design.html" style="font-weight:700">Design Notes</a><a href="https://github.com/opheadacheh/turbodata">GitHub</a></nav>
+</header>
+<div class="layout">
+  <aside class="toc"><div class="toc">
+<ul>
+<li><a href="#turbodata-design-notes">turbodata design notes</a><ul>
+<li><a href="#the-problem">The problem</a><ul>
+<li><a href="#goals">Goals</a></li>
+<li><a href="#non-goals">Non-goals</a></li>
+</ul>
+</li>
+<li><a href="#key-design-decisions">Key design decisions</a><ul>
+<li><a href="#index-separated-from-data-summary-at-the-end">Index separated from data, summary at the end</a></li>
+<li><a href="#topic-groups-that-share-chunks">Topic groups that share chunks</a></li>
+<li><a href="#chunking-with-configurable-thresholds">Chunking with configurable thresholds</a></li>
+<li><a href="#per-chunk-compression">Per-chunk compression</a></li>
+<li><a href="#portable-flexible-encoding">Portable, flexible encoding</a></li>
+<li><a href="#floor-sampling-as-a-first-class-operation">Floor sampling as a first-class operation</a></li>
+<li><a href="#cost-aware-concurrent-reads">Cost-aware concurrent reads</a></li>
+<li><a href="#video-gop-aware-chunking">Video: GOP-aware chunking</a></li>
+<li><a href="#zero-copy-iteration">Zero-copy iteration</a></li>
+<li><a href="#multi-file-reading">Multi-file reading</a></li>
+</ul>
+</li>
+<li><a href="#relationship-to-mcap">Relationship to MCAP</a></li>
+<li><a href="#multi-language-strategy">Multi-language strategy</a></li>
+<li><a href="#trade-offs-and-limitations">Trade-offs and limitations</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</aside>
+  <main><h1 id="turbodata-design-notes">turbodata design notes</h1>
+<p>This document explains <em>why</em> turbodata exists and the reasoning behind its
+design. For the byte-level contract, see <a href="format.html">FORMAT.md</a>.</p>
+<h2 id="the-problem">The problem</h2>
+<p>A lot of valuable data is <strong>multi-topic, timestamped streams</strong>: a robot or
+autonomous vehicle log with <code>/camera</code>, <code>/lidar</code>, <code>/imu</code>, <code>/gps</code>, <code>/odom</code>; an ML
+training shard interleaving several sensor modalities; any time-series capture
+with heterogeneous channels. The access patterns that matter for these are
+rarely "read the whole file start to finish." They are:</p>
+<ul>
+<li><em>"Give me <code>/camera</code> and <code>/imu</code> between t₁ and t₂."</em></li>
+<li><em>"For these 1,000 timestamps, give me the latest <code>/camera</code> frame at or before
+  each."</em> (temporal alignment across topics for training/eval)</li>
+<li><em>"Play this back in a browser, seeking around, fetching over HTTP."</em></li>
+</ul>
+<p>And increasingly the bytes don't live on local disk — they live in <strong>object
+storage</strong> (S3/GCS), where every request has latency and (often) a price, so
+<em>how</em> you read matters as much as <em>what</em> you read.</p>
+<p>turbodata is a container format built specifically for <strong>read-efficient,
+random access</strong> over exactly this kind of data, on both local disk and remote
+object storage, from multiple languages (including the browser).</p>
+<h3 id="goals">Goals</h3>
+<ul>
+<li>Fast topic- and time-bounded random reads without scanning the whole file.</li>
+<li>First-class multi-topic temporal alignment (floor sampling).</li>
+<li>Efficient reads over high-latency / paid object storage.</li>
+<li>Identical on-disk format across languages, so a file written anywhere reads
+  anywhere — including read-only in the browser.</li>
+<li>Single-pass streaming writes.</li>
+</ul>
+<h3 id="non-goals">Non-goals</h3>
+<ul>
+<li>In-place mutation or random writes. Files are written once, front to back.</li>
+<li>Interpreting payloads. Message bytes are opaque; schema/encoding is the
+  caller's concern (carried in topic metadata if desired).</li>
+<li>A general database. There are no secondary indexes beyond time-per-topic.</li>
+</ul>
+<h2 id="key-design-decisions">Key design decisions</h2>
+<h3 id="index-separated-from-data-summary-at-the-end">Index separated from data, summary at the end</h3>
+<p>The payload bytes (data chunks) come first; the index chunks, then the summary,
+then a fixed footer come last. A reader starts at the footer, jumps to the
+summary, and from there knows every topic, every index chunk, and its time
+range — having read only a few KB. It then fetches only the index and data
+chunks that overlap the query.</p>
+<p>Putting the summary <strong>at the end</strong> is what makes single-pass writing possible:
+the writer streams data chunks as messages arrive and only needs to know the
+full directory once everything has been written. The cost — a reader can't
+begin until it has seen the tail — is irrelevant for random access (you seek
+anyway) and cheap to mitigate for streaming (read the tail first).</p>
+<h3 id="topic-groups-that-share-chunks">Topic groups that share chunks</h3>
+<p>Topics opened together form a <strong>group</strong> and interleave their messages into
+shared chunks. This is a deliberate knob: co-locating topics that are usually
+read together (e.g. a stereo pair, or a sensor and its calibration) keeps their
+bytes physically close, so one coalesced read serves them both. Topics that are
+read independently can be opened in separate groups to keep their bytes — and
+their chunk boundaries — apart.</p>
+<h3 id="chunking-with-configurable-thresholds">Chunking with configurable thresholds</h3>
+<p>Data is split into chunks by size, duration, or message count. Chunk size is
+the central random-access trade-off:</p>
+<ul>
+<li><strong>Smaller chunks</strong> → finer granularity, less wasted I/O per query, larger
+  index, slightly worse compression ratios.</li>
+<li><strong>Larger chunks</strong> → better compression, smaller index, coarser reads.</li>
+</ul>
+<p>Making this per-group and configurable lets a writer tune for its data (e.g.
+tiny IMU messages vs. large camera frames) instead of accepting one global
+compromise.</p>
+<h3 id="per-chunk-compression">Per-chunk compression</h3>
+<p>Compression (Zstandard) is applied <strong>per chunk</strong>, not per file. This is what
+keeps random access cheap under compression: to read one chunk you decompress
+one frame, not the whole file. zstd was chosen for its strong ratio at high
+decompression speed and its broad, well-maintained library support across Go,
+Python, and JavaScript/WASM — a hard requirement for a cross-language format.</p>
+<h3 id="portable-flexible-encoding">Portable, flexible encoding</h3>
+<p>Fixed-width fields are <strong>big-endian</strong> integers with explicit widths, so the
+layout is unambiguous across languages and architectures. Per-topic metadata is
+an open <code>map&lt;string, any&gt;</code> encoded with <strong>MessagePack</strong>, so callers can attach
+arbitrary structured metadata (schema name, encoding, calibration, frame ids)
+without any format change, while the hot path (offsets, timestamps, lengths)
+stays in tight fixed-width records.</p>
+<h3 id="floor-sampling-as-a-first-class-operation">Floor sampling as a first-class operation</h3>
+<p>"For each of these query timestamps, give me the latest message at or before
+it" is the core primitive for aligning multiple topics onto a common time base
+(e.g. labeling camera frames with the most recent IMU reading). Doing this well
+requires the index — binary-searching per-topic timestamps and fetching only
+the chunks that contain the floor messages — so it belongs <em>in</em> the format's
+reader, not bolted on by every caller. The reader plans all the needed reads up
+front and issues them together.</p>
+<h3 id="cost-aware-concurrent-reads">Cost-aware concurrent reads</h3>
+<p>This is the feature that most distinguishes turbodata. The default reader path
+is a simple lazy, serial walk — minimal memory, ideal for local disk. But for
+object storage that path is pathological: thousands of tiny serial GETs, each
+paying a full round-trip.</p>
+<p>So the reader has a second path driven by a <code>ReadStrategy</code>. It pre-plans every
+byte range it will need, then:</p>
+<ul>
+<li><strong>coalesces</strong> adjacent ranges separated by less than <code>CoalesceGap</code> into one
+  request (trading a few wasted bytes for one fewer round-trip),</li>
+<li><strong>splits</strong> any single range larger than <code>SplitThreshold</code> into parallel
+  sub-reads (trading extra requests for lower wall-clock), and</li>
+<li>issues everything concurrently up to <code>MaxConcurrency</code>.</li>
+</ul>
+<p>The right values depend on your storage's cost model, so the SDK ships explicit
+constructors for the common ones:</p>
+<ul>
+<li><code>StrategyForLatency(rtt, perStreamBW, concurrency)</code> — minimize wall-clock.
+  Coalesce/split around the bandwidth-delay product so each parallel stream
+  stays saturated for ~one RTT.</li>
+<li><code>StrategyForMoney(reqPrice, bytePrice, concurrency)</code> — minimize spend where
+  each request costs money (e.g. S3 GET). Coalesce aggressively (every avoided
+  request is money saved up to <code>reqPrice/bytePrice</code> bytes) and never split
+  (splits are extra paid requests).</li>
+<li><code>StrategyForBlended(reqPrice, bytePrice, maxReadTime, perStreamBW, concurrency)</code>
+  — minimize spend but cap any single read's latency.</li>
+</ul>
+<p>Exposing the cost model rather than a single "fast" mode lets the same file be
+read optimally from local disk, in-region S3, or cross-region storage just by
+changing the strategy.</p>
+<h3 id="video-gop-aware-chunking">Video: GOP-aware chunking</h3>
+<p>Coded video can't be decoded from an arbitrary frame — you need the key frame
+that starts its Group of Pictures (GOP) and every frame since. turbodata makes
+video topics randomly decodable by (1) treating chunk thresholds as a lower
+bound and only ever cutting a chunk at a key frame, guaranteeing a GOP never
+straddles two chunks, and (2) storing per-chunk key-frame positions in the
+index. A reader can then fetch a single chunk, find the keyframe at or before
+the target, and feed the decoder forward. turbodata never parses the bitstream;
+the writer flags key frames, keeping the format codec-agnostic.</p>
+<h3 id="zero-copy-iteration">Zero-copy iteration</h3>
+<p>The reader exposes a "next into a reusable buffer" iteration style: message
+bytes alias an internal buffer that is reused across iterations, avoiding an
+allocation per message on the hot path. Callers that need to retain a message
+copy it explicitly (and the SDKs offer a <code>copy</code> option). This matters when
+iterating millions of small messages.</p>
+<h3 id="multi-file-reading">Multi-file reading</h3>
+<p>A <code>MultiReader</code> merges several files into one time-ordered stream, applying
+filters per file before the merge and resolving topic-name collisions via
+per-file topic remaps. This supports the common pattern of a recording split
+across many files, or augmenting a base recording with a sidecar file, without
+physically rewriting anything.</p>
+<h2 id="relationship-to-mcap">Relationship to MCAP</h2>
+<p>turbodata is informed by <a href="https://mcap.dev/">MCAP</a> (the Foxglove container for
+robotics logs) and the toolchain interoperates with it — the Go examples and
+benchmarks convert MCAP to <code>.td</code> and compare against it. turbodata is narrower
+and more opinionated: it focuses on read-efficient random access and multi-topic
+temporal alignment over local <em>and</em> object storage, with an explicit cost-aware
+read planner and a browser-first read-only port. Where MCAP is a general,
+schema-rich logging container, turbodata optimizes the specific
+random-access/sampling workloads above.</p>
+<h2 id="multi-language-strategy">Multi-language strategy</h2>
+<ul>
+<li><strong>Go</strong> is the reference implementation and the only full read+write SDK. The
+  format is whatever the Go implementation reads and writes.</li>
+<li><strong>Python</strong> is a read+write port aimed at data/ML workflows (read training
+  data, write preprocessed shards, sample for alignment).</li>
+<li><strong>TypeScript</strong> is a read-only, browser-targeted port so web apps (e.g.
+  Foxglove/Lichtblick-style viewers) can load <code>.td</code> files locally (<code>File</code>/<code>Blob</code>)
+  or remotely (HTTP range), using the same cost-aware path.</li>
+</ul>
+<p>Cross-language correctness is enforced by tests that read fixtures produced by
+other SDKs and compare results, so the "write anywhere, read anywhere"
+guarantee is checked, not just claimed.</p>
+<h2 id="trade-offs-and-limitations">Trade-offs and limitations</h2>
+<ul>
+<li><strong>Write-once.</strong> No in-place edits; mutation means rewriting (or layering with
+  <code>MultiReader</code>).</li>
+<li><strong>Monotonic per group.</strong> Messages within a group must be non-decreasing in
+  time; out-of-order producers must sort or split into groups.</li>
+<li><strong>No on-disk version field yet.</strong> The format is pre-1.0; the magic is the
+  only identifier (see <a href="format.html#versioning">FORMAT.md</a>).</li>
+<li><strong>Opaque payloads.</strong> No built-in schema system; schema/encoding lives in
+  topic metadata by convention.</li>
+</ul></main>
+</div>
+<footer class="pagefoot">turbodata · Apache-2.0 · generated from Markdown by docs/build.py</footer>
+</body>
+</html>

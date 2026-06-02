@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Format Specification · turbodata</title>
+<style>
+:root {
+  --fg: #1f2328; --muted: #59636e; --bg: #ffffff; --soft: #f6f8fa;
+  --border: #d1d9e0; --accent: #0969da; --code-bg: #f6f8fa;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; color: var(--fg); background: var(--bg);
+  font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+header.topbar {
+  position: sticky; top: 0; z-index: 10; background: var(--bg);
+  border-bottom: 1px solid var(--border); padding: 12px 24px;
+  display: flex; align-items: center; gap: 20px;
+}
+header.topbar .brand { font-weight: 700; font-size: 18px; }
+header.topbar nav { display: flex; gap: 16px; flex-wrap: wrap; }
+.layout { display: flex; max-width: 1180px; margin: 0 auto; }
+aside.toc {
+  flex: 0 0 240px; padding: 28px 16px; position: sticky; top: 49px;
+  align-self: flex-start; max-height: calc(100vh - 49px); overflow: auto;
+  font-size: 14px; border-right: 1px solid var(--border);
+}
+aside.toc ul { list-style: none; padding-left: 14px; margin: 4px 0; }
+aside.toc > ul { padding-left: 0; }
+aside.toc a { color: var(--muted); display: block; padding: 2px 0; }
+aside.toc a:hover { color: var(--accent); }
+main { flex: 1 1 auto; min-width: 0; padding: 28px 36px; max-width: 820px; }
+main h1 { font-size: 30px; padding-bottom: .3em; border-bottom: 1px solid var(--border); }
+main h2 { font-size: 23px; margin-top: 2em; padding-bottom: .3em; border-bottom: 1px solid var(--border); }
+main h3 { font-size: 18px; margin-top: 1.6em; }
+code, pre, kbd { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+:not(pre) > code {
+  background: var(--code-bg); padding: .15em .35em; border-radius: 5px; font-size: 85%;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px 16px; overflow: auto; font-size: 85%; line-height: 1.45;
+}
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; display: block; overflow: auto; }
+th, td { border: 1px solid var(--border); padding: 7px 13px; text-align: left; }
+th { background: var(--soft); }
+tr:nth-child(2n) td { background: var(--soft); }
+blockquote {
+  margin: 1em 0; padding: 0 1em; color: var(--muted);
+  border-left: .25em solid var(--border);
+}
+.headerlink { visibility: hidden; margin-left: .35em; font-size: .8em; }
+h1:hover .headerlink, h2:hover .headerlink, h3:hover .headerlink { visibility: visible; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 2em 0; }
+footer.pagefoot { max-width: 1180px; margin: 0 auto; padding: 24px 36px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--border); }
+@media (max-width: 900px) { aside.toc { display: none; } main { padding: 20px; } }
+</style>
+<style>pre { line-height: 125%; }
+td.linenos .normal { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+.codehilite .hll { background-color: #ffffcc }
+.codehilite { background: #f8f8f8; }
+.codehilite .c { color: #3D7B7B; font-style: italic } /* Comment */
+.codehilite .err { border: 1px solid #F00 } /* Error */
+.codehilite .k { color: #008000; font-weight: bold } /* Keyword */
+.codehilite .o { color: #666 } /* Operator */
+.codehilite .ch { color: #3D7B7B; font-style: italic } /* Comment.Hashbang */
+.codehilite .cm { color: #3D7B7B; font-style: italic } /* Comment.Multiline */
+.codehilite .cp { color: #9C6500 } /* Comment.Preproc */
+.codehilite .cpf { color: #3D7B7B; font-style: italic } /* Comment.PreprocFile */
+.codehilite .c1 { color: #3D7B7B; font-style: italic } /* Comment.Single */
+.codehilite .cs { color: #3D7B7B; font-style: italic } /* Comment.Special */
+.codehilite .gd { color: #A00000 } /* Generic.Deleted */
+.codehilite .ge { font-style: italic } /* Generic.Emph */
+.codehilite .ges { font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+.codehilite .gr { color: #E40000 } /* Generic.Error */
+.codehilite .gh { color: #000080; font-weight: bold } /* Generic.Heading */
+.codehilite .gi { color: #008400 } /* Generic.Inserted */
+.codehilite .go { color: #717171 } /* Generic.Output */
+.codehilite .gp { color: #000080; font-weight: bold } /* Generic.Prompt */
+.codehilite .gs { font-weight: bold } /* Generic.Strong */
+.codehilite .gu { color: #800080; font-weight: bold } /* Generic.Subheading */
+.codehilite .gt { color: #04D } /* Generic.Traceback */
+.codehilite .kc { color: #008000; font-weight: bold } /* Keyword.Constant */
+.codehilite .kd { color: #008000; font-weight: bold } /* Keyword.Declaration */
+.codehilite .kn { color: #008000; font-weight: bold } /* Keyword.Namespace */
+.codehilite .kp { color: #008000 } /* Keyword.Pseudo */
+.codehilite .kr { color: #008000; font-weight: bold } /* Keyword.Reserved */
+.codehilite .kt { color: #B00040 } /* Keyword.Type */
+.codehilite .m { color: #666 } /* Literal.Number */
+.codehilite .s { color: #BA2121 } /* Literal.String */
+.codehilite .na { color: #687822 } /* Name.Attribute */
+.codehilite .nb { color: #008000 } /* Name.Builtin */
+.codehilite .nc { color: #00F; font-weight: bold } /* Name.Class */
+.codehilite .no { color: #800 } /* Name.Constant */
+.codehilite .nd { color: #A2F } /* Name.Decorator */
+.codehilite .ni { color: #717171; font-weight: bold } /* Name.Entity */
+.codehilite .ne { color: #CB3F38; font-weight: bold } /* Name.Exception */
+.codehilite .nf { color: #00F } /* Name.Function */
+.codehilite .nl { color: #767600 } /* Name.Label */
+.codehilite .nn { color: #00F; font-weight: bold } /* Name.Namespace */
+.codehilite .nt { color: #008000; font-weight: bold } /* Name.Tag */
+.codehilite .nv { color: #19177C } /* Name.Variable */
+.codehilite .ow { color: #A2F; font-weight: bold } /* Operator.Word */
+.codehilite .w { color: #BBB } /* Text.Whitespace */
+.codehilite .mb { color: #666 } /* Literal.Number.Bin */
+.codehilite .mf { color: #666 } /* Literal.Number.Float */
+.codehilite .mh { color: #666 } /* Literal.Number.Hex */
+.codehilite .mi { color: #666 } /* Literal.Number.Integer */
+.codehilite .mo { color: #666 } /* Literal.Number.Oct */
+.codehilite .sa { color: #BA2121 } /* Literal.String.Affix */
+.codehilite .sb { color: #BA2121 } /* Literal.String.Backtick */
+.codehilite .sc { color: #BA2121 } /* Literal.String.Char */
+.codehilite .dl { color: #BA2121 } /* Literal.String.Delimiter */
+.codehilite .sd { color: #BA2121; font-style: italic } /* Literal.String.Doc */
+.codehilite .s2 { color: #BA2121 } /* Literal.String.Double */
+.codehilite .se { color: #AA5D1F; font-weight: bold } /* Literal.String.Escape */
+.codehilite .sh { color: #BA2121 } /* Literal.String.Heredoc */
+.codehilite .si { color: #A45A77; font-weight: bold } /* Literal.String.Interpol */
+.codehilite .sx { color: #008000 } /* Literal.String.Other */
+.codehilite .sr { color: #A45A77 } /* Literal.String.Regex */
+.codehilite .s1 { color: #BA2121 } /* Literal.String.Single */
+.codehilite .ss { color: #19177C } /* Literal.String.Symbol */
+.codehilite .bp { color: #008000 } /* Name.Builtin.Pseudo */
+.codehilite .fm { color: #00F } /* Name.Function.Magic */
+.codehilite .vc { color: #19177C } /* Name.Variable.Class */
+.codehilite .vg { color: #19177C } /* Name.Variable.Global */
+.codehilite .vi { color: #19177C } /* Name.Variable.Instance */
+.codehilite .vm { color: #19177C } /* Name.Variable.Magic */
+.codehilite .il { color: #666 } /* Literal.Number.Integer.Long */</style>
+</head>
+<body>
+<header class="topbar">
+  <span class="brand"><a href="index.html">turbodata</a></span>
+  <nav><a href="index.html">Home</a><a href="format.html" style="font-weight:700">Format Spec</a><a href="design.html">Design Notes</a><a href="https://github.com/opheadacheh/turbodata">GitHub</a></nav>
+</header>
+<div class="layout">
+  <aside class="toc"><div class="toc">
+<ul>
+<li><a href="#turbodata-format-specification">turbodata format specification</a><ul>
+<li><a href="#terminology">Terminology</a></li>
+<li><a href="#file-layout">File layout</a></li>
+<li><a href="#primitive-encodings">Primitive encodings</a></li>
+<li><a href="#data-chunk">Data chunk</a></li>
+<li><a href="#index-chunk">Index chunk</a></li>
+<li><a href="#summary">Summary</a><ul>
+<li><a href="#locating-index-chunks">Locating index chunks</a></li>
+<li><a href="#reserved-metadata-keys">Reserved metadata keys</a></li>
+</ul>
+</li>
+<li><a href="#footer">Footer</a></li>
+<li><a href="#reading-algorithm">Reading algorithm</a></li>
+<li><a href="#writing-algorithm">Writing algorithm</a><ul>
+<li><a href="#chunk-thresholds">Chunk thresholds</a></li>
+</ul>
+</li>
+<li><a href="#video-topics">Video topics</a></li>
+<li><a href="#versioning">Versioning</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</aside>
+  <main><h1 id="turbodata-format-specification">turbodata format specification</h1>
+<p>This document specifies the on-disk layout of a turbodata (<code>.td</code>) file. The Go
+SDK (<code>go/turbodata</code>) is the reference implementation; the Python and TypeScript
+SDKs produce and consume byte-identical files. Anything described here is the
+contract — an independent reader/writer that follows it will interoperate.</p>
+<ul>
+<li><strong>Status:</strong> v0 (pre-1.0). See <a href="#versioning">Versioning</a>.</li>
+<li><strong>Endianness:</strong> all fixed-width integers are <strong>big-endian</strong>.</li>
+<li><strong>Compression:</strong> <a href="https://datatracker.ietf.org/doc/html/rfc8878">Zstandard</a>
+  (standard zstd frames).</li>
+</ul>
+<h2 id="terminology">Terminology</h2>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Message</strong></td>
+<td>One opaque payload (<code>bytes</code>) plus an <code>int64</code> timestamp. turbodata does not interpret payload bytes.</td>
+</tr>
+<tr>
+<td><strong>Topic</strong></td>
+<td>A named, metadata-tagged stream of messages, assigned a numeric <code>id</code>.</td>
+</tr>
+<tr>
+<td><strong>Topic group</strong></td>
+<td>A set of topics opened together that share data chunks. Messages from all topics in a group are interleaved by timestamp into the same chunks.</td>
+</tr>
+<tr>
+<td><strong>Data chunk</strong></td>
+<td>A contiguous, optionally zstd-compressed blob holding the concatenated payloads of the messages in one chunk of one group.</td>
+</tr>
+<tr>
+<td><strong>Index chunk</strong></td>
+<td>The per-data-chunk index: which topics/messages it contains, their timestamps, and their byte offsets. Always zstd-compressed.</td>
+</tr>
+<tr>
+<td><strong>Summary</strong></td>
+<td>The file-level directory: per group, the topic metadata and the list of index-chunk locations + time ranges. zstd-compressed.</td>
+</tr>
+<tr>
+<td><strong>Footer</strong></td>
+<td>A fixed 13-byte trailer: the summary length and the magic identifier.</td>
+</tr>
+</tbody>
+</table>
+<p>Timestamps are signed 64-bit integers in a unit chosen by the writer
+(commonly nanoseconds). The only format-level requirement is that, within a
+single topic group, messages are written in <strong>non-decreasing timestamp order</strong>.</p>
+<h2 id="file-layout">File layout</h2>
+<p>A turbodata file has <strong>no leading header</strong>; it is identified solely by the
+trailing magic in the footer. The overall layout is:</p>
+<div class="codehilite"><pre><span></span><code>+-------------------------------------------+  offset 0
+|  Data chunks, group 0                     |
+|  Data chunks, group 1                     |   message payloads
+|  ...                                      |   (raw, or one zstd frame per chunk)
+|  Data chunks, group N-1                   |
++-------------------------------------------+
+|  Index chunks, group 0                    |
+|  Index chunks, group 1                    |   one zstd frame per index chunk
+|  ...                                      |
+|  Index chunks, group N-1                  |
++-------------------------------------------+
+|  Summary                                  |   one zstd frame
++-------------------------------------------+
+|  Footer (13 bytes, uncompressed)          |
++-------------------------------------------+  EOF
+</code></pre></div>
+
+<p>All data chunks are written first (in group-open order), then all index chunks,
+then the summary, then the footer. This lets a writer stream message bytes to
+the output in a single forward pass and emit the index/summary only at the end,
+while a reader can start from the footer and seek directly to what it needs.</p>
+<h2 id="primitive-encodings">Primitive encodings</h2>
+<p>Three primitives are reused throughout:</p>
+<table>
+<thead>
+<tr>
+<th>Primitive</th>
+<th>Encoding</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>intN</strong></td>
+<td><code>int8/16/32/64</code> / <code>uint8/16/32/64</code>, big-endian, fixed width.</td>
+</tr>
+<tr>
+<td><strong>string</strong></td>
+<td><code>uint32</code> byte length (big-endian) followed by that many UTF-8 bytes.</td>
+</tr>
+<tr>
+<td><strong>map</strong></td>
+<td><code>uint32</code> byte length (big-endian) followed by a <a href="https://msgpack.org/">MessagePack</a>-encoded <code>map&lt;string, any&gt;</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Strings and maps are each capped at 64 MiB by the reference reader.</p>
+<h2 id="data-chunk">Data chunk</h2>
+<p>A data chunk is the concatenation of the raw payload bytes of every message
+assigned to that chunk, across all topics in the group, in write order
+(non-decreasing timestamp). If the group is compressed, the entire concatenated
+buffer is emitted as a single zstd frame; otherwise it is emitted raw.</p>
+<p>Message boundaries are <strong>not</strong> stored inside the data chunk. A message's bytes
+span <code>[offset, next_offset)</code> in the <em>uncompressed</em> chunk buffer, where:</p>
+<ul>
+<li><code>offset</code> is the message's <code>OffsetInChunk</code> (from its index entry), and</li>
+<li><code>next_offset</code> is the smallest <code>OffsetInChunk</code> greater than <code>offset</code> among all
+  message-index entries of all topics in that chunk, or the chunk's
+  <code>UncompressedLen</code> if there is none.</li>
+</ul>
+<p>Because offsets are assigned from a single shared buffer per group, the offsets
+of all messages in a chunk partition <code>[0, UncompressedLen)</code>.</p>
+<h2 id="index-chunk">Index chunk</h2>
+<p>Each data chunk has exactly one index chunk. The index chunk is serialized as
+below and then <strong>zstd-compressed</strong> as a whole before being written to the file.</p>
+<div class="codehilite"><pre><span></span><code>IndexChunk:
+  uint32                  topic_index_count
+  TopicIndex[topic_index_count]
+  int64                   chunk_offset       # file offset of the data chunk
+  int64                   chunk_len          # on-disk (compressed) length of the data chunk
+  int64                   uncompressed_len    # uncompressed length of the data chunk
+
+TopicIndex:
+  uint16                  topic_id
+  uint32                  message_index_count
+  MessageIndex[message_index_count]
+  uint32                  key_frame_count
+  uint32[key_frame_count]  # positions into MessageIndex[] that are key frames (video only)
+
+MessageIndex:               # 16 bytes
+  int64                   timestamp
+  int64                   offset_in_chunk     # start of this message in the uncompressed chunk
+</code></pre></div>
+
+<p>A <code>TopicIndex</code> is present only for topics that actually have messages in that
+chunk. <code>key_frame_count</code> is <code>0</code> for non-video topics.</p>
+<h2 id="summary">Summary</h2>
+<p>The summary is the file directory: one <code>TopicsInfo</code> per topic group, in
+group-open order. It is serialized as below and then <strong>zstd-compressed</strong> as a
+whole.</p>
+<div class="codehilite"><pre><span></span><code>Summary:
+  uint32                  topics_info_count
+  TopicsInfo[topics_info_count]
+
+TopicsInfo:
+  uint32                  topic_metadata_count
+  TopicMetadata[topic_metadata_count]
+  uint32                  index_chunk_info_count
+  IndexChunkInfo[index_chunk_info_count]
+  int64                   total_len           # total on-disk bytes of this group&#39;s index chunks
+
+TopicMetadata:
+  uint16                  id
+  string                  name
+  map                     metadata            # caller-supplied, plus control flags (see below)
+
+IndexChunkInfo:             # 24 bytes
+  int64                   start_timestamp     # min timestamp in the index chunk
+  int64                   end_timestamp       # max timestamp in the index chunk
+  int64                   offset              # file offset of the (compressed) index chunk
+</code></pre></div>
+
+<h3 id="locating-index-chunks">Locating index chunks</h3>
+<p>A group's index chunks are stored contiguously, starting at
+<code>index_chunk_info[0].offset</code> and spanning <code>total_len</code> bytes. The on-disk length
+of index chunk <code>i</code> is therefore:</p>
+<div class="codehilite"><pre><span></span><code>len(i) = index_chunk_info[i+1].offset - index_chunk_info[i].offset           # i &lt; last
+len(last) = total_len - index_chunk_info[last].offset + index_chunk_info[0].offset
+</code></pre></div>
+
+<h3 id="reserved-metadata-keys">Reserved metadata keys</h3>
+<p>A topic's <code>metadata</code> map carries arbitrary caller key/values, plus reserved
+control keys (namespaced with a <code>__td_</code> prefix) that the reader depends on:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>__td_is_compressed</code></td>
+<td>bool</td>
+<td>The group's data chunks are zstd-compressed.</td>
+</tr>
+<tr>
+<td><code>__td_is_video</code></td>
+<td>bool</td>
+<td>This is a video topic (GOP-aware; see <a href="#video-topics">Video topics</a>).</td>
+</tr>
+</tbody>
+</table>
+<p>(A third write-time-only key, <code>__td_chunk_config</code>, controls chunking but is
+stripped before serialization and never appears on disk.)</p>
+<h2 id="footer">Footer</h2>
+<p>The footer is a fixed <strong>13 bytes</strong>, written uncompressed:</p>
+<div class="codehilite"><pre><span></span><code>Footer:
+  int64                   summary_len         # on-disk (compressed) length of the summary
+  uint8[5]                magic = {&#39;7&#39;,&#39;U&#39;,&#39;R&#39;,&#39;B&#39;,&#39;0&#39;}   # 0x37 55 52 42 30
+</code></pre></div>
+
+<h2 id="reading-algorithm">Reading algorithm</h2>
+<ol>
+<li>Read the last <code>13</code> bytes (the footer). Verify <code>magic == "7URB0"</code>.</li>
+<li>The summary occupies the <code>summary_len</code> bytes immediately preceding the
+   footer, i.e. <code>[file_size - 13 - summary_len, file_size - 13)</code>. Read and
+   zstd-decompress it, then parse. (A reader may speculatively read a larger
+   tail window in one request to fetch footer + summary together.)</li>
+<li>The summary gives, per group: topic metadata and the list of index-chunk
+   offsets with their time ranges. Use the time ranges to skip index chunks
+   outside a query window.</li>
+<li>For each needed index chunk, read its bytes (offset from the summary, length
+   computed as in <a href="#locating-index-chunks">Locating index chunks</a>),
+   zstd-decompress, and parse. It yields the per-message timestamps/offsets and
+   the location (<code>chunk_offset</code>, <code>chunk_len</code>, <code>uncompressed_len</code>) of the data
+   chunk.</li>
+<li>Read the data chunk, decompress if the group is compressed, and slice out
+   messages using consecutive <code>offset_in_chunk</code> values.</li>
+</ol>
+<p>Because the index is separate from and far smaller than the payload data, a
+reader can answer time/topic-bounded queries by fetching only the index chunks
+and the data chunks that actually overlap the query.</p>
+<h2 id="writing-algorithm">Writing algorithm</h2>
+<p>A writer streams output in one forward pass:</p>
+<ol>
+<li><strong>Open a group</strong> of one or more topics (assigning each an incrementing
+   <code>id</code>), recording their metadata and a chunk-threshold configuration.</li>
+<li><strong>Write messages</strong> in non-decreasing timestamp order. Each payload is
+   appended to the in-progress chunk buffer and a <code>MessageIndex</code> (timestamp +
+   offset) is recorded. When the chunk threshold is reached, the chunk is
+   flushed: optionally compressed, written to the file, and its <code>IndexChunk</code>
+   recorded in memory.</li>
+<li><strong>Close the group</strong>, flushing any partial chunk.</li>
+<li>Repeat for further groups.</li>
+<li>On <strong>close</strong>: write all groups' index chunks (each compressed), then the
+   compressed summary, then the footer.</li>
+</ol>
+<h3 id="chunk-thresholds">Chunk thresholds</h3>
+<p>A chunk is flushed when the in-progress chunk reaches a configurable threshold:</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Flush when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Size</td>
+<td>accumulated payload bytes ≥ <code>size</code></td>
+</tr>
+<tr>
+<td>Duration</td>
+<td><code>last_timestamp - first_timestamp_in_chunk</code> ≥ <code>duration</code></td>
+</tr>
+<tr>
+<td>Count</td>
+<td>message count ≥ <code>count</code></td>
+</tr>
+</tbody>
+</table>
+<p>Smaller chunks give finer random-access granularity (less wasted I/O per query)
+at the cost of a larger index and slightly worse compression; larger chunks
+compress better but read coarser. The default is size-based at 1 MiB.</p>
+<h2 id="video-topics">Video topics</h2>
+<p>A topic opened as a video topic (<code>__td_is_video = true</code>) stores coded video
+frames and has extra constraints so that any frame is randomly decodable:</p>
+<ul>
+<li>A video group contains <strong>exactly one topic</strong> and is <strong>never co-compressed</strong>
+  (the bitstream is already compressed).</li>
+<li>The <strong>first message of the topic must be a key frame</strong>, otherwise the leading
+  GOP would be undecodable.</li>
+<li>Chunk thresholds act as a <strong>lower bound</strong>: a chunk is only flushed when a key
+  frame arrives <em>and</em> the threshold has been met. This guarantees a Group of
+  Pictures (GOP) is never split across chunks, so decoding any frame requires
+  at most one data chunk.</li>
+<li><code>KeyFrameIndexes</code> in each <code>TopicIndex</code> lists the positions (within that
+  chunk's <code>MessageIndexes</code>) that are key frames, so a reader can find the
+  keyframe at or before a target frame and feed the decoder forward from there.</li>
+</ul>
+<p>turbodata does not parse the bitstream; the writer is responsible for correctly
+flagging key frames (IDR for H.264, IRAP for H.265, <code>KEY_FRAME</code> for AV1,
+keyframe for VP9).</p>
+<h2 id="versioning">Versioning</h2>
+<p>The format is currently <strong>v0 / pre-1.0</strong>. There is no explicit version field on
+disk; the 5-byte magic <code>7URB0</code> is the only identifier. Backward-incompatible
+changes before 1.0 may not be detectable by older readers beyond a parse
+failure. Introducing an explicit version number is tracked for a future
+revision; until then, treat the magic as identifying "the turbodata format as
+described in this document."</p></main>
+</div>
+<footer class="pagefoot">turbodata · Apache-2.0 · generated from Markdown by docs/build.py</footer>
+</body>
+</html>
