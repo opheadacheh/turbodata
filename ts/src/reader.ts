@@ -208,6 +208,19 @@ interface GroupIt {
   >;
 }
 
+/**
+ * Per-exposed-topic span used by MultiReader. `isVideo` flags a video topic
+ * (always a single-topic group); [minTs, maxTs] is the inclusive timestamp
+ * span of the topic's messages. Mirrors go topicBound / py _TopicBound.
+ *
+ * @internal
+ */
+export interface TopicBound {
+  isVideo: boolean;
+  minTs: bigint;
+  maxTs: bigint;
+}
+
 export class Reader {
   private readonly rs: ReadSource;
   private readonly decompress: Decompressor;
@@ -215,6 +228,8 @@ export class Reader {
   // Lazy-loaded summary metadata.
   private cachedSize: bigint | undefined;
   private cachedSummary: Summary | undefined;
+  // Cached per-exposed-topic bounds, computed lazily by topicBounds().
+  private boundsCache: Map<string, TopicBound> | undefined;
 
   // topicRemap maps in-file -> exposed names; undefined means identity.
   private readonly topicRemap: Map<string, string> | undefined;
@@ -540,6 +555,45 @@ export class Reader {
       this.decompress,
       videoDecodable,
     );
+  }
+
+  /**
+   * Per-exposed-topic bounds, computed once from the cached summary. Honors any
+   * configured remap so keys are exposed names. Used by MultiReader to merge
+   * streams and enforce video time-disjointness. Mirrors go (*Reader).topicBounds
+   * and py Reader._topic_bounds.
+   *
+   * @internal
+   */
+  async topicBounds(): Promise<Map<string, TopicBound>> {
+    if (this.boundsCache !== undefined) {
+      return this.boundsCache;
+    }
+    const summary = await this.summaryWithHint(0n);
+    this.prepareRename(summary);
+    const out = new Map<string, TopicBound>();
+    for (const ti of summary.topicsInfos) {
+      if (ti.indexChunkInfoList.length === 0) {
+        continue;
+      }
+      let minTs = ti.indexChunkInfoList[0]!.startTimestamp;
+      let maxTs = ti.indexChunkInfoList[0]!.endTimestamp;
+      for (const info of ti.indexChunkInfoList) {
+        if (info.startTimestamp < minTs) {
+          minTs = info.startTimestamp;
+        }
+        if (info.endTimestamp > maxTs) {
+          maxTs = info.endTimestamp;
+        }
+      }
+      const isVideo = isVideoTopicsInfo(ti);
+      for (const tm of ti.topicMetadatas) {
+        const exposed = this.topicRemap?.get(tm.name) ?? tm.name;
+        out.set(exposed, { isVideo, minTs, maxTs });
+      }
+    }
+    this.boundsCache = out;
+    return out;
   }
 
   // ---- Default path setup ---------------------------------------------

@@ -16,6 +16,8 @@ export type {
   SampleOptions,
 } from "./reader.js";
 
+export { MultiReader, VideoSourcesOverlapError } from "./multi_reader.js";
+
 export type { ReadOptions, Order } from "./read_options.js";
 export { MAX_INT64 } from "./read_options.js";
 
