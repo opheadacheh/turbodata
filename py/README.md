@@ -97,6 +97,23 @@ reader.read_messages(
 )
 ```
 
+## Topic remap
+
+Present in-file topic names under different exposed names. The map is keyed by
+in-file name and valued by the exposed name reported by `summary()`, emitted
+from `read_messages`, and accepted by `topic_names` and `SampleQuery.topic`.
+Names absent from the map pass through unchanged.
+
+```python
+reader = Reader(src, topic_remap={"/cam": "/cam_v2"})
+for msg in reader.read_messages(topic_names=["/cam_v2"]):
+    print(msg.topic_name)  # "/cam_v2"
+```
+
+The remap is validated lazily against the file's summary on first use: it
+raises `TopicRemapCollisionError` if two topics collapse onto the same exposed
+name.
+
 ## Cost-aware concurrent reads
 
 For cloud object storage (S3 / GCS) or large local reads, switch to the
@@ -154,6 +171,7 @@ Roll your own for HTTP range reads, S3, GCS, etc.
 | `WithOrder(ReverseTimeOrder)`       | `order=Order.REVERSE_TIME`          |
 | `WithReadStrategy(s)`               | `strategy=...`                      |
 | `WithTailPrefetch(n)`               | `tail_prefetch=n`                   |
+| `WithTopicRemap(m)`                 | `Reader(src, topic_remap={...})`    |
 | `NewWriter(f)`                      | `Writer(f)`                         |
 | `OpenTopics(names, metas, opts...)` | `writer.open_topics(...)`           |
 | `WithChunkConfig(cc)`               | `chunk_config=ChunkConfig(...)`     |

@@ -24,7 +24,12 @@ from ._iter import (
     sort_and_filter,
 )
 from ._sample import SampleSpec, sample as _sample
-from .errors import FileTooSmallError, InvalidMagicError, SampleValidationError
+from .errors import (
+    FileTooSmallError,
+    InvalidMagicError,
+    SampleValidationError,
+    TopicRemapCollisionError,
+)
 from .source import ReadSource
 from .strategy import ReadStrategy
 
@@ -109,15 +114,95 @@ DEFAULT_SAMPLE_STRATEGY = ReadStrategy(
 
 
 class Reader:
-    def __init__(self, source: ReadSource) -> None:
+    def __init__(
+        self,
+        source: ReadSource,
+        *,
+        topic_remap: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """Open a reader over `source`.
+
+        topic_remap presents in-file topic names under different exposed names.
+        The dict is keyed by in-file name and valued by the exposed name
+        emitted from read_messages, accepted by topic_names and
+        SampleQuery.topic, and reported by summary(). Names absent from the map
+        pass through unchanged; None/empty means identity (no behavior change).
+
+        The remap is validated lazily against the file's summary on first use:
+        it is an error (TopicRemapCollisionError) for two topics to collapse
+        onto the same exposed name, whether two in-file names map to the same
+        target or a renamed name collides with an untouched in-file name.
+        """
         self._source = source
         self._summary: Optional[_codec.Summary] = None
         self._footer: Optional[_codec.Footer] = None
 
+        # topic_remap maps in-file -> exposed names. nil/empty means identity.
+        self._topic_remap: Dict[str, str] = dict(topic_remap) if topic_remap else {}
+        # Cached prepare_rename outputs (computed lazily once the summary is
+        # known). _rename_inverse maps exposed -> in-file; _rename_err captures
+        # a remap collision detected against the actual summary.
+        self._rename_prepared = False
+        self._rename_inverse: Optional[Dict[str, str]] = None
+        self._rename_err: Optional[TopicRemapCollisionError] = None
+
+    # ---- remap helpers --------------------------------------------------
+    def _prepare_rename(self, summary: _codec.Summary) -> Optional[Dict[str, str]]:
+        """Build the exposed -> in-file inverse map once the summary is known
+        and validate that no two topics collapse onto the same exposed name.
+        Results (including any error) are cached. Returns None when no remap is
+        configured."""
+        if self._rename_prepared:
+            if self._rename_err is not None:
+                raise self._rename_err
+            return self._rename_inverse
+        self._rename_prepared = True
+        if not self._topic_remap:
+            return None
+        inverse: Dict[str, str] = {}
+        for ti in summary.topics_infos:
+            for tm in ti.topic_metadatas:
+                exposed = self._topic_remap.get(tm.name, tm.name)
+                if exposed in inverse:
+                    self._rename_err = TopicRemapCollisionError(
+                        exposed, inverse[exposed], tm.name
+                    )
+                    raise self._rename_err
+                inverse[exposed] = tm.name
+        self._rename_inverse = inverse
+        return inverse
+
+    def _exposed_summary(self, summary: _codec.Summary) -> _codec.Summary:
+        """Return a copy of summary with TopicMetadata.name rewritten to exposed
+        names. Index-chunk lists and metadata maps are shared (read-only here).
+        When no remap is configured the original summary is returned."""
+        if not self._topic_remap:
+            return summary
+        self._prepare_rename(summary)
+        out_infos: List[_codec.TopicsInfo] = []
+        for ti in summary.topics_infos:
+            new_tms = [
+                _codec.TopicMetadata(
+                    id=tm.id,
+                    name=self._topic_remap.get(tm.name, tm.name),
+                    metadata=tm.metadata,
+                )
+                for tm in ti.topic_metadatas
+            ]
+            out_infos.append(
+                _codec.TopicsInfo(
+                    topic_metadatas=new_tms,
+                    index_chunk_info_list=ti.index_chunk_info_list,
+                    total_len=ti.total_len,
+                )
+            )
+        return _codec.Summary(topics_infos=out_infos)
+
     # ---- summary --------------------------------------------------------
     def summary(self) -> _codec.Summary:
-        """Returns the parsed summary, loaded lazily on first call."""
-        return self._summary_with_hint(0)
+        """Returns the parsed summary, loaded lazily on first call. When a topic
+        remap is configured, TopicMetadata.name reports exposed names."""
+        return self._exposed_summary(self._summary_with_hint(0))
 
     def _summary_with_hint(self, prefetch: int) -> _codec.Summary:
         if self._summary is not None:
@@ -181,10 +266,18 @@ class Reader:
         """
         summary = self._summary_with_hint(tail_prefetch)
 
+        # When a remap is configured, caller-supplied topic_names arrive in
+        # exposed-name space. Internal matching stays in in-file space, so
+        # translate exposed -> in-file (unknown names pass through and simply
+        # match nothing). id_to_name is built in exposed space for output.
+        inverse = self._prepare_rename(summary) if self._topic_remap else None
+
         if topic_names is None:
             wanted: Set[str] = {
                 tm.name for ti in summary.topics_infos for tm in ti.topic_metadatas
             }
+        elif inverse is not None:
+            wanted = {inverse.get(n, n) for n in topic_names}
         else:
             wanted = set(topic_names)
 
@@ -194,7 +287,7 @@ class Reader:
             for tm in ti.topic_metadatas:
                 if tm.name in wanted:
                     topic_ids.add(tm.id)
-                    id_to_name[tm.id] = tm.name
+                    id_to_name[tm.id] = self._topic_remap.get(tm.name, tm.name)
 
         if strategy is not None:
             group_its = self._prepare_cost_aware(
@@ -408,6 +501,20 @@ class Reader:
             strategy = DEFAULT_SAMPLE_STRATEGY
 
         summary = self._summary_with_hint(tail_prefetch)
+
+        # When a remap is configured, queries arrive in exposed-name space.
+        # Translate to in-file names before validation and the engine call;
+        # SampleResult is positional, so no translation back is needed.
+        if self._topic_remap:
+            inverse = self._prepare_rename(summary)
+            queries = [
+                SampleQuery(
+                    topic=inverse.get(q.topic, q.topic) if inverse else q.topic,
+                    timestamps=q.timestamps,
+                )
+                for q in queries
+            ]
+
         _validate_sample_queries(queries, summary)
 
         specs = [SampleSpec(topic=q.topic, timestamps=list(q.timestamps)) for q in queries]

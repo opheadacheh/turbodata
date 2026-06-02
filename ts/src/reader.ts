@@ -41,6 +41,38 @@ export interface Message {
 export interface ReaderOptions {
   /** Override the default fzstd decompressor (e.g. for a WASM zstd build). */
   decompress?: Decompressor;
+  /**
+   * Present in-file topic names under different exposed names. Keyed by in-file
+   * name, valued by the exposed name emitted from readMessages, accepted by
+   * ReadOptions.topicNames and SampleQuery.topic, and reported by summary().
+   * Names absent from the map pass through unchanged; omitting it means
+   * identity (no behavior change).
+   *
+   * Validated lazily against the file's summary on first use: it throws a
+   * TopicRemapError when two topics collapse onto the same exposed name
+   * (whether two in-file names map to the same target, or a renamed name
+   * collides with an untouched in-file name).
+   */
+  topicRemap?: Record<string, string>;
+}
+
+/**
+ * Thrown when a configured topic remap collapses two in-file topics onto the
+ * same exposed name. Detected lazily against the summary on first use.
+ */
+export class TopicRemapError extends Error {
+  readonly exposed: string;
+  readonly first: string;
+  readonly second: string;
+  constructor(exposed: string, first: string, second: string) {
+    super(
+      `turbodata: topic remap produces duplicate exposed name "${exposed}" (from in-file topics "${first}" and "${second}")`,
+    );
+    this.name = "TopicRemapError";
+    this.exposed = exposed;
+    this.first = first;
+    this.second = second;
+  }
 }
 
 /**
@@ -184,14 +216,86 @@ export class Reader {
   private cachedSize: bigint | undefined;
   private cachedSummary: Summary | undefined;
 
+  // topicRemap maps in-file -> exposed names; undefined means identity.
+  private readonly topicRemap: Map<string, string> | undefined;
+  // Cached prepareRename outputs (computed lazily once the summary is known).
+  // renameInverse maps exposed -> in-file; renameErr captures a collision
+  // detected against the actual summary.
+  private renamePrepared = false;
+  private renameInverse: Map<string, string> | undefined;
+  private renameErr: TopicRemapError | undefined;
+
   constructor(rs: ReadSource, opts: ReaderOptions = {}) {
     this.rs = rs;
     this.decompress = opts.decompress ?? defaultDecompressor;
+    const remap = opts.topicRemap;
+    this.topicRemap =
+      remap !== undefined && Object.keys(remap).length > 0
+        ? new Map(Object.entries(remap))
+        : undefined;
   }
 
-  /** Returns the parsed summary, loading and caching it on first call. */
+  /**
+   * Build the exposed -> in-file inverse map once the summary is known and
+   * validate that no two topics collapse onto the same exposed name. Results
+   * (including any error) are cached. Returns undefined when no remap is set.
+   */
+  private prepareRename(summary: Summary): Map<string, string> | undefined {
+    if (this.renamePrepared) {
+      if (this.renameErr !== undefined) {
+        throw this.renameErr;
+      }
+      return this.renameInverse;
+    }
+    this.renamePrepared = true;
+    if (this.topicRemap === undefined) {
+      return undefined;
+    }
+    const inverse = new Map<string, string>();
+    for (const ti of summary.topicsInfos) {
+      for (const tm of ti.topicMetadatas) {
+        const exposed = this.topicRemap.get(tm.name) ?? tm.name;
+        const prev = inverse.get(exposed);
+        if (prev !== undefined) {
+          this.renameErr = new TopicRemapError(exposed, prev, tm.name);
+          throw this.renameErr;
+        }
+        inverse.set(exposed, tm.name);
+      }
+    }
+    this.renameInverse = inverse;
+    return inverse;
+  }
+
+  /**
+   * Return a copy of `summary` with TopicMetadata.name rewritten to exposed
+   * names. Index-chunk lists and metadata maps are shared (read-only here).
+   * Returns the original summary when no remap is configured.
+   */
+  private exposedSummary(summary: Summary): Summary {
+    if (this.topicRemap === undefined) {
+      return summary;
+    }
+    this.prepareRename(summary);
+    return {
+      topicsInfos: summary.topicsInfos.map((ti) => ({
+        topicMetadatas: ti.topicMetadatas.map((tm) => ({
+          id: tm.id,
+          name: this.topicRemap!.get(tm.name) ?? tm.name,
+          metadata: tm.metadata,
+        })),
+        indexChunkInfoList: ti.indexChunkInfoList,
+        totalLen: ti.totalLen,
+      })),
+    };
+  }
+
+  /**
+   * Returns the parsed summary, loading and caching it on first call. When a
+   * topic remap is configured, TopicMetadata.name reports exposed names.
+   */
   async summary(): Promise<Summary> {
-    return this.summaryWithHint(0n);
+    return this.exposedSummary(await this.summaryWithHint(0n));
   }
 
   private async summaryWithHint(prefetch: bigint): Promise<Summary> {
@@ -277,13 +381,26 @@ export class Reader {
     const init = async (): Promise<void> => {
       const summary = await reader.summaryWithHint(tailPrefetch);
 
-      // Build topic-name allowlist. Defaults to "all topics".
-      const wantedSet =
-        wantedNames !== undefined
-          ? new Set(wantedNames)
-          : collectAllTopicNames(summary);
+      // When a remap is configured, caller-supplied topicNames arrive in
+      // exposed-name space. Internal matching stays in in-file space, so
+      // translate exposed -> in-file (unknown names pass through and match
+      // nothing). idToName is built in exposed space for output.
+      const remap = reader.topicRemap;
+      const inverse =
+        remap !== undefined ? reader.prepareRename(summary) : undefined;
 
-      // Translate names -> ids; remember reverse mapping.
+      // Build topic-name allowlist. Defaults to "all topics".
+      let wantedSet: Set<string>;
+      if (wantedNames !== undefined) {
+        wantedSet =
+          inverse !== undefined
+            ? new Set(wantedNames.map((n) => inverse.get(n) ?? n))
+            : new Set(wantedNames);
+      } else {
+        wantedSet = collectAllTopicNames(summary);
+      }
+
+      // Translate names -> ids; remember reverse mapping (exposed names).
       const topicIds = new Set<number>();
       for (const ti of summary.topicsInfos) {
         for (const tm of ti.topicMetadatas) {
@@ -291,7 +408,7 @@ export class Reader {
             continue;
           }
           topicIds.add(tm.id);
-          idToName.set(tm.id, tm.name);
+          idToName.set(tm.id, remap?.get(tm.name) ?? tm.name);
         }
       }
 
@@ -395,6 +512,18 @@ export class Reader {
     const strategy = opts.strategy ?? DEFAULT_SAMPLE_STRATEGY;
     const videoDecodable = opts.videoDecodable === true;
     const summary = await this.summaryWithHint(opts.tailPrefetch ?? 0n);
+
+    // When a remap is configured, queries arrive in exposed-name space.
+    // Translate to in-file names before validation and the engine call;
+    // SampleResult is positional, so no translation back is needed.
+    if (this.topicRemap !== undefined) {
+      const inverse = this.prepareRename(summary);
+      queries = queries.map((q) => ({
+        topic: inverse?.get(q.topic) ?? q.topic,
+        timestamps: q.timestamps,
+      }));
+    }
+
     validateSampleQueries(queries, summary);
 
     const specs: SampleSpec[] = queries.map((q) => ({

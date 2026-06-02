@@ -48,6 +48,23 @@ to other workers, pass `{ copy: true }`:
 for await (const msg of reader.readMessages({ copy: true })) { ... }
 ```
 
+## Topic remap
+
+Present in-file topic names under different exposed names. The map is keyed by
+in-file name and valued by the exposed name reported by `summary()`, emitted
+from `readMessages`, and accepted by `topicNames` and `SampleQuery.topic`.
+Names absent from the map pass through unchanged.
+
+```ts
+const reader = new Reader(source, { topicRemap: { "/cam": "/cam_v2" } });
+for await (const msg of reader.readMessages({ topicNames: ["/cam_v2"] })) {
+  console.log(msg.topicName); // "/cam_v2"
+}
+```
+
+The remap is validated lazily against the file's summary on first use: it
+throws `TopicRemapError` if two topics collapse onto the same exposed name.
+
 ## Cost-aware reading (HTTP Range)
 
 ```ts

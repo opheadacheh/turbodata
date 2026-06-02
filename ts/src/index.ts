@@ -3,6 +3,7 @@
 export {
   Reader,
   SampleValidationError,
+  TopicRemapError,
   DEFAULT_SAMPLE_STRATEGY,
   linSpaceTimestamps,
 } from "./reader.js";

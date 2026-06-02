@@ -60,6 +60,21 @@ class SampleValidationError(TurbodataError):
         super().__init__("; ".join(self.violations))
 
 
+class TopicRemapCollisionError(TurbodataError):
+    """Raised when a configured topic remap collapses two in-file topics onto
+    the same exposed name (validated lazily against the summary on first use).
+    """
+
+    def __init__(self, exposed: str, first: str, second: str):
+        self.exposed = exposed
+        self.first = first
+        self.second = second
+        super().__init__(
+            f"turbodata: topic remap produces duplicate exposed name {exposed!r} "
+            f"(from in-file topics {first!r} and {second!r})"
+        )
+
+
 # ---- Video-topic constraints. See Writer.open_topics(video=True) and
 # Writer.write_video_message. -------------------------------------------------
 class VideoGroupMustBeSingleTopicError(TurbodataError):
