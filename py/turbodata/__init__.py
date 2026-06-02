@@ -47,10 +47,12 @@ from .errors import (
     TopicRemapCollisionError,
     TurbodataError,
     VideoGroupMustBeSingleTopicError,
+    VideoSourcesOverlapError,
     VideoTopicCannotBeCompressedError,
     WriteMessageOnVideoTopicError,
     WriteVideoMessageOnNonVideoTopicError,
 )
+from .multi_reader import MultiReader
 from .reader import (
     DEFAULT_SAMPLE_STRATEGY,
     Frame,
@@ -72,6 +74,7 @@ from .writer import Writer
 __all__ = [
     # Reader / writer
     "Reader",
+    "MultiReader",
     "Writer",
     "Message",
     # Read sources
@@ -115,6 +118,7 @@ __all__ = [
     "FileTooSmallError",
     "SampleValidationError",
     "TopicRemapCollisionError",
+    "VideoSourcesOverlapError",
     "VideoGroupMustBeSingleTopicError",
     "VideoTopicCannotBeCompressedError",
     "FirstVideoMessageMustBeKeyFrameError",

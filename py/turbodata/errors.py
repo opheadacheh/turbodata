@@ -75,6 +75,30 @@ class TopicRemapCollisionError(TurbodataError):
         )
 
 
+class VideoSourcesOverlapError(TurbodataError):
+    """Raised by MultiReader.sample/read_messages under video_decodable when a
+    queried video topic is provided by more than one reader whose time ranges
+    overlap. Decodable multi-file video sampling requires each video topic's
+    source files to be time-disjoint; merging overlapping decodable sources
+    would interleave frames from different GOP chains into an undecodable
+    stream. Mirrors go ErrVideoSourcesOverlap.
+    """
+
+    def __init__(
+        self,
+        topic: str,
+        first: tuple = None,
+        second: tuple = None,
+    ):
+        self.topic = topic
+        self.first = first
+        self.second = second
+        super().__init__(
+            f"turbodata: video topic {topic!r} sources {first} and {second} "
+            f"overlap in time"
+        )
+
+
 # ---- Video-topic constraints. See Writer.open_topics(video=True) and
 # Writer.write_video_message. -------------------------------------------------
 class VideoGroupMustBeSingleTopicError(TurbodataError):

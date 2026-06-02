@@ -113,6 +113,17 @@ DEFAULT_SAMPLE_STRATEGY = ReadStrategy(
 )
 
 
+@dataclass
+class _TopicBound:
+    """Per-exposed-topic span used by MultiReader. ``is_video`` flags a video
+    topic (always a single-topic group); ``[min_ts, max_ts]`` is the inclusive
+    timestamp span of the topic's messages. Mirrors go topicBound."""
+
+    is_video: bool
+    min_ts: int
+    max_ts: int
+
+
 class Reader:
     def __init__(
         self,
@@ -145,6 +156,9 @@ class Reader:
         self._rename_prepared = False
         self._rename_inverse: Optional[Dict[str, str]] = None
         self._rename_err: Optional[TopicRemapCollisionError] = None
+
+        # Cached per-exposed-topic bounds, computed lazily by _topic_bounds.
+        self._bounds_cache: Optional[Dict[str, _TopicBound]] = None
 
     # ---- remap helpers --------------------------------------------------
     def _prepare_rename(self, summary: _codec.Summary) -> Optional[Dict[str, str]]:
@@ -233,6 +247,33 @@ class Reader:
         decompressed = _compress.decompress(compressed)
         self._summary = _codec.read_summary_from_bytes(decompressed)
         return self._summary
+
+    # ---- topic bounds (for MultiReader) --------------------------------
+    def _topic_bounds(self) -> Dict[str, _TopicBound]:
+        """Per-exposed-topic bounds, computed once from the cached summary.
+        Honors any configured remap so keys are exposed names. Mirrors go
+        (*Reader).topicBounds."""
+        if self._bounds_cache is not None:
+            return self._bounds_cache
+        summary = self._summary_with_hint(0)
+        self._prepare_rename(summary)
+        out: Dict[str, _TopicBound] = {}
+        for ti in summary.topics_infos:
+            if not ti.index_chunk_info_list:
+                continue
+            min_ts = ti.index_chunk_info_list[0].start_timestamp
+            max_ts = ti.index_chunk_info_list[0].end_timestamp
+            for info in ti.index_chunk_info_list:
+                if info.start_timestamp < min_ts:
+                    min_ts = info.start_timestamp
+                if info.end_timestamp > max_ts:
+                    max_ts = info.end_timestamp
+            is_video = _is_video_topics_info(ti)
+            for tm in ti.topic_metadatas:
+                exposed = self._topic_remap.get(tm.name, tm.name)
+                out[exposed] = _TopicBound(is_video=is_video, min_ts=min_ts, max_ts=max_ts)
+        self._bounds_cache = out
+        return out
 
     # ---- read_messages --------------------------------------------------
     def read_messages(
