@@ -1,4 +1,4 @@
-module turbodata
+module github.com/opheadacheh/turbodata/go
 
 go 1.26.1
 

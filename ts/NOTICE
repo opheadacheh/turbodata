@@ -1,0 +1,27 @@
+turbodata
+Copyright 2026 Wanjia He
+
+This product includes software developed by Wanjia He and the turbodata
+contributors.
+
+Licensed under the Apache License, Version 2.0 (see the LICENSE file).
+
+---
+
+This software depends on third-party packages that are downloaded at build
+time and are not redistributed as part of this source tree. Each remains
+under its own license. Notable dependencies include:
+
+Go SDK (go/):
+  - github.com/foxglove/mcap/go/mcap        (MIT)
+  - github.com/klauspost/compress           (BSD-3-Clause / Apache-2.0 / MIT)
+  - github.com/vmihailenco/msgpack/v5       (BSD-2-Clause)
+  - github.com/google/go-cmp                (BSD-3-Clause)
+
+Python SDK (py/):
+  - msgpack                                 (Apache-2.0)
+  - zstandard                               (BSD-3-Clause)
+
+TypeScript SDK (ts/):
+  - @msgpack/msgpack                        (ISC)
+  - fzstd                                   (MIT)

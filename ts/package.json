@@ -2,6 +2,26 @@
   "name": "turbodata",
   "version": "0.1.0",
   "description": "Browser TypeScript reader for the turbodata format.",
+  "license": "Apache-2.0",
+  "author": "Wanjia He",
+  "homepage": "https://github.com/opheadacheh/turbodata#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/opheadacheh/turbodata.git",
+    "directory": "ts"
+  },
+  "bugs": {
+    "url": "https://github.com/opheadacheh/turbodata/issues"
+  },
+  "keywords": [
+    "turbodata",
+    "container-format",
+    "timeseries",
+    "robotics",
+    "mcap",
+    "msgpack",
+    "zstd"
+  ],
   "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",
@@ -15,7 +35,9 @@
   "files": [
     "dist",
     "src",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
