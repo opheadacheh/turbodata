@@ -108,6 +108,8 @@ for await (const msg of reader.readMessages()) {
   byte range, coalesces neighbors, optionally splits large reads, and issues
   them concurrently. Tunable for latency (object storage) or request cost (S3),
   via `StrategyForLatency` / `StrategyForMoney` / `StrategyForBlended`.
+- **Video friendly** - GOP is guaranteed not to be split into different chunks,
+  reading a specific video frame is ensured to start with a keyframe.
 - **Topic remap** — present in-file topic names under different exposed names.
 - **Multi-file reading** — merge several files into one time-ordered stream.
 - **Pluggable sources** — local files, in-memory bytes, HTTP range, S3/GCS, …
