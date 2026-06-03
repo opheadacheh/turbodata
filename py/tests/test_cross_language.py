@@ -20,8 +20,9 @@ Python SDKs. These tests:
      message stream to detect any decoding regression.
   2. Write a file with Python and re-open it with Python to confirm a clean
      roundtrip (the cross-language read path is exercised by go/ts test
-     fixtures above; the reverse direction — running Go on Python files — is
-     verified in CI by /py/scripts if present).
+     fixtures above; the reverse direction — running Go on a Python-written
+     file — is covered by go/turbodata's TestReadPythonDemo, which CI runs
+     after generating py/examples/demo.td).
 """
 from __future__ import annotations
 

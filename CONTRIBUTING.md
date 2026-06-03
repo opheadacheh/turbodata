@@ -88,6 +88,16 @@ Two mechanisms enforce this:
    to actually exercise the Go→Python read path you must generate the demo file
    first.
 
+3. **Python → Go.** `go/turbodata`'s `TestReadPythonDemo` reads
+   `py/examples/demo.td` (produced by the Python `write_demo.py` example) and
+   asserts the Go reference SDK decodes every message identically. It `t.Skip`s
+   when the file is absent, so generate it first:
+
+   ```bash
+   cd py && python examples/write_demo.py        # writes py/examples/demo.td
+   cd ../go/turbodata && go test -run TestReadPythonDemo .
+   ```
+
 ### Regenerating fixtures
 
 ```bash

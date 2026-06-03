@@ -63,6 +63,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[test]"
           pytest tests/ -q
+      # Reverse direction: the Python SDK writes a .td file and the Go reference
+      # SDK must read it back identically. Mirrors the Go->Python check above.
+      - name: Generate Python cross-language fixture
+        working-directory: py
+        run: python examples/write_demo.py
+      - name: Go reads the Python-written file
+        working-directory: go/turbodata
+        run: go test -run TestReadPythonDemo -v .
 
   typescript:
     name: TypeScript
