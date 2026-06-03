@@ -46,6 +46,26 @@ def _hash_messages(reader: Reader) -> str:
     return h.hexdigest()
 
 
+def _hash_metadata(reader: Reader) -> str:
+    """Hash the topic metadata in canonical (sorted-key) msgpack form. This
+    catches metadata-encoding regressions that _hash_messages misses, since
+    the message stream ignores the summary's metadata maps entirely."""
+    import msgpack
+
+    from turbodata._codec import _sort_map_keys
+
+    h = hashlib.sha256()
+    summary = reader.summary()
+    for ti in summary.topics_infos:
+        for tm in ti.topic_metadatas:
+            h.update(tm.id.to_bytes(2, "big"))
+            h.update(tm.name.encode("utf-8"))
+            h.update(b"|")
+            h.update(msgpack.packb(_sort_map_keys(tm.metadata), use_bin_type=True))
+            h.update(b"\n")
+    return h.hexdigest()
+
+
 @pytest.mark.skipif(not os.path.exists(GO_DEMO), reason="go demo not built")
 class TestReadGoFile:
     def test_reader_can_open_go_demo(self):
@@ -61,6 +81,15 @@ class TestReadGoFile:
         with FileReadSource(GO_DEMO) as src:
             r = Reader(src)
             digest = _hash_messages(r)
+        assert isinstance(digest, str) and len(digest) == 64
+
+    def test_metadata_hash_is_stable(self):
+        """The Go demo's metadata must decode to the same canonical bytes the
+        Python writer would emit. Guards the sorted-key invariant shared across
+        SDKs (see Go SetSortMapKeys / Python _sort_map_keys)."""
+        with FileReadSource(GO_DEMO) as src:
+            r = Reader(src)
+            digest = _hash_metadata(r)
         assert isinstance(digest, str) and len(digest) == 64
 
 
@@ -102,3 +131,23 @@ class TestPythonRoundtrip:
         r1 = Reader(BytesReadSource(raw))
         r2 = Reader(BytesReadSource(raw))
         assert _hash_messages(r1) == _hash_messages(r2)
+
+    def test_metadata_key_order_is_canonical(self):
+        """Two files whose metadata dicts are built with different insertion
+        orders must serialize to byte-identical metadata. Without sorted-key
+        encoding, Python's insertion-ordered dicts would diverge here."""
+        from turbodata import Writer, BytesReadSource
+
+        def setup_a(w: Writer) -> None:
+            w.open_topics(["t"], [{"hz": 10, "encoding": "jpeg", "frame": "cam"}])
+            w.write_message("t", b"x", 1)
+            w.close_topic()
+
+        def setup_b(w: Writer) -> None:
+            w.open_topics(["t"], [{"frame": "cam", "hz": 10, "encoding": "jpeg"}])
+            w.write_message("t", b"x", 1)
+            w.close_topic()
+
+        ra = Reader(BytesReadSource(build_file(setup_a)))
+        rb = Reader(BytesReadSource(build_file(setup_b)))
+        assert _hash_metadata(ra) == _hash_metadata(rb)

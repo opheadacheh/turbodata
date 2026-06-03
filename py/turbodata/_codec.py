@@ -157,8 +157,20 @@ def _read_map(r: BinaryIO) -> Dict[str, Any]:
     return m
 
 
+def _sort_map_keys(value: Any) -> Any:
+    """Recursively sort dict keys so the msgpack encoding is deterministic and
+    byte-identical to the Go SDK (which uses SetSortMapKeys(true)). Python dicts
+    are insertion-ordered, so without this two callers that build the same
+    metadata in different key orders would emit different bytes."""
+    if isinstance(value, dict):
+        return {k: _sort_map_keys(value[k]) for k in sorted(value)}
+    if isinstance(value, list):
+        return [_sort_map_keys(v) for v in value]
+    return value
+
+
 def _write_map(w: BinaryIO, m: Dict[str, Any]) -> None:
-    raw = msgpack.packb(m, use_bin_type=True)
+    raw = msgpack.packb(_sort_map_keys(m), use_bin_type=True)
     _write_u32(w, len(raw))
     w.write(raw)
 

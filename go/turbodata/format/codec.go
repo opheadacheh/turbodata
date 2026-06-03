@@ -15,6 +15,7 @@
 package format
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -76,17 +77,25 @@ func readMap(r io.Reader) (map[string]any, error) {
 }
 
 func writeMap(w io.Writer, m map[string]any) error {
-	bytes, err := msgpack.Marshal(m)
-	if err != nil {
+	// Sort map keys so the encoded bytes are deterministic across runs and
+	// byte-identical across language SDKs. Without this, Go randomizes map
+	// iteration order, producing a different file every run.
+	var buf bytes.Buffer
+	enc := msgpack.GetEncoder()
+	enc.Reset(&buf)
+	enc.SetSortMapKeys(true)
+	if err := enc.Encode(m); err != nil {
 		return err
 	}
 
-	mapLen := uint32(len(bytes))
+	msgpack.PutEncoder(enc)
+
+	mapLen := uint32(buf.Len())
 	if err := binary.Write(w, binary.BigEndian, mapLen); err != nil {
 		return err
 	}
 
-	_, err = w.Write(bytes)
+	_, err := w.Write(buf.Bytes())
 	return err
 }
 
