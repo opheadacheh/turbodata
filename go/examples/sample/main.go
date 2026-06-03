@@ -42,6 +42,7 @@ func main() {
 	demoMultiTopic()
 	demoEdgeCases()
 	demoWithReadStrategy()
+	demoVideoDecodable()
 }
 
 // demoSingleTopic asks for /imu at three concrete timestamps. /imu was
@@ -159,6 +160,46 @@ func demoWithReadStrategy() {
 		log.Fatalf("Sample: %v", err)
 	}
 	printResults("/imu", []int64{200, 500, 800}, out[0])
+}
+
+// demoVideoDecodable samples the video topic /cam/h264 (GOP A at ts 100..400,
+// GOP B at ts 500..800) with WithSampleVideoDecodable.
+//
+// Without the option, a video topic samples like any other topic: each result
+// is the single floor frame in Data. That frame may be a non-key frame that a
+// decoder can't start from. With the option, each result instead carries a
+// decoder-ready GOP sequence in Frames (and Data is nil):
+//
+//   - The first found result in each GOP sets ResetDecoder=true and Frames is
+//     the whole prefix [keyframe ... target].
+//   - Subsequent results in the same GOP set ResetDecoder=false and Frames is
+//     only the new frames since the previous query (carry the decoder state
+//     forward; don't reset).
+//
+// Here T=350 lands in GOP A and T=650 lands in GOP B, so both reset.
+func demoVideoDecodable() {
+	section("video: GOP-prefix sampling (WithSampleVideoDecodable)")
+	r := openReader()
+	ts := []int64{350, 650}
+	out, err := r.Sample(
+		[]turbodata.SampleQuery{{Topic: "/cam/h264", Timestamps: ts}},
+		turbodata.WithSampleVideoDecodable(),
+	)
+	if err != nil {
+		log.Fatalf("Sample: %v", err)
+	}
+	for i, res := range out[0] {
+		if !res.Found {
+			fmt.Printf("  /cam/h264@T=%-4d  (no key frame at or before T)\n", ts[i])
+			continue
+		}
+		labels := make([]string, len(res.Frames))
+		for j, fr := range res.Frames {
+			labels[j] = fmt.Sprintf("ts=%d", fr.Timestamp)
+		}
+		fmt.Printf("  /cam/h264@T=%-4d  -> target ts=%d reset=%-5v frames=%v\n",
+			ts[i], res.Timestamp, res.ResetDecoder, labels)
+	}
 }
 
 // ---------------------------------------------------------------------------

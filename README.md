@@ -127,7 +127,11 @@ SDK guides:
 
 - **Go** — [`go/turbodata/README.md`](./go/turbodata/README.md) · runnable examples in [`go/examples/`](./go/examples)
 - **Python** — [`py/README.md`](./py/README.md) · runnable examples in [`py/examples/`](./py/examples)
-- **TypeScript** — [`ts/README.md`](./ts/README.md)
+- **TypeScript** — [`ts/README.md`](./ts/README.md) · runnable examples in [`ts/examples/`](./ts/examples)
+
+Each SDK guide walks the same feature order — write, read, sample, multi-file —
+with runnable examples covering filters, ordering, cost-aware strategies, and
+video.
 
 Rendered HTML versions of the spec and design notes live in [`docs/`](./docs)
 (`docs/format.html`, `docs/design.html`); regenerate them with `python docs/build.py`
@@ -142,7 +146,7 @@ go/
   benchmark/    performance benchmarks
   cmd/          maintenance tooling
 py/             Python SDK (read + write) + examples + tests
-ts/             TypeScript SDK (browser, read-only) + tests
+ts/             TypeScript SDK (browser, read-only) + examples + tests
 ```
 
 The Go workspace is split so that consumers of the library

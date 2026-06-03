@@ -1,6 +1,7 @@
 .cursor
 
 *.mcap
+demo.td
 
 test_artifacts/
 /playground/

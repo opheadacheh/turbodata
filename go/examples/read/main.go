@@ -31,6 +31,7 @@
 //	WithOrder            — TimeOrder (default) or ReverseTimeOrder
 //	WithReadStrategy     — switch onto the cost-aware concurrent-I/O path
 //	WithTailPrefetch     — single ReadAt for footer + summary on small files
+//	WithVideoDecodable   — snap a video topic's start back to its key frame
 //
 // ReadStrategy gets a dedicated walkthrough below; it's the most-asked-about
 // knob because it changes the I/O shape of the reader (lazy vs concurrent),
@@ -52,14 +53,15 @@ const inPath = "examples/demo.td"
 func main() {
 	demoSummary()
 	demoReadAll()
+	demoReverseOrder()
 	demoTopicFilter()
 	demoTimeRange()
-	demoReverseOrder()
 	demoTailPrefetch()
 	demoReadStrategyDefault()
 	demoReadStrategyLatency()
 	demoReadStrategyMoney()
 	demoReadStrategyBlended()
+	demoVideoDecodable()
 }
 
 // demoSummary prints the file's summary without reading any messages. The
@@ -266,6 +268,45 @@ func demoReadStrategyBlended() {
 		log.Fatalf("ReadMessages: %v", err)
 	}
 	iterate(it, 0)
+}
+
+// demoVideoDecodable shows the video-aware read path on /cam/h264 (GOP A at
+// ts 100..400, GOP B at ts 500..800).
+//
+// A video topic stores compressed frames where a non-key frame is only
+// decodable after its GOP's key frame. A plain time filter that starts
+// mid-GOP therefore yields bytes a decoder can't cold-start on. WithVideo-
+// Decodable snaps the effective StartTimestamp back to the latest key frame
+// at or before the requested start, so the emitted sequence begins with a
+// key frame and feeds a decoder correctly. Non-video topics are unaffected.
+func demoVideoDecodable() {
+	section("video: start=650 mid-GOP, plain vs WithVideoDecodable")
+
+	// Plain: start=650 lands inside GOP B (after K@500), so the first emitted
+	// frame is a non-key frame the decoder cannot start from.
+	r := openReader()
+	plain, err := r.ReadMessages(
+		turbodata.WithTopicNames([]string{"/cam/h264"}),
+		turbodata.WithStartTimestamp(650),
+	)
+	if err != nil {
+		log.Fatalf("ReadMessages: %v", err)
+	}
+	fmt.Println("  plain (undecodable, starts mid-GOP):")
+	iterate(plain, 0)
+
+	// Decodable: snaps back to K@500 so the sequence starts on a key frame.
+	r = openReader()
+	decodable, err := r.ReadMessages(
+		turbodata.WithTopicNames([]string{"/cam/h264"}),
+		turbodata.WithStartTimestamp(650),
+		turbodata.WithVideoDecodable(),
+	)
+	if err != nil {
+		log.Fatalf("ReadMessages: %v", err)
+	}
+	fmt.Println("  decodable (snapped back to the key frame at ts=500):")
+	iterate(decodable, 0)
 }
 
 // ---------------------------------------------------------------------------

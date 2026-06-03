@@ -141,19 +141,40 @@ def demo_strategy_blended(reader: Reader) -> None:
     iterate(reader.read_messages(strategy=strat))
 
 
+def demo_video_decodable(reader: Reader) -> None:
+    """Video-aware read on /cam/h264 (GOP A at ts 100..400, GOP B at 500..800).
+
+    A non-key frame is only decodable after its GOP's key frame, so a plain
+    time filter that starts mid-GOP yields bytes a decoder can't cold-start on.
+    video_decodable=True snaps the effective start back to the latest key frame
+    at or before it, so the emitted sequence starts decodable. Non-video topics
+    are unaffected.
+    """
+    section("video: start=650 mid-GOP, plain vs video_decodable")
+    print("  plain (undecodable, starts mid-GOP):")
+    iterate(reader.read_messages(topic_names=["/cam/h264"], start_timestamp=650))
+    print("  decodable (snapped back to the key frame at ts=500):")
+    iterate(
+        reader.read_messages(
+            topic_names=["/cam/h264"], start_timestamp=650, video_decodable=True
+        )
+    )
+
+
 def main() -> None:
     with FileReadSource(IN_PATH) as src:
         reader = Reader(src)
         demo_summary(reader)
         demo_read_all(reader)
+        demo_reverse_order(reader)
         demo_topic_filter(reader)
         demo_time_range(reader)
-        demo_reverse_order(reader)
         demo_tail_prefetch(reader)
         demo_strategy_default(reader)
         demo_strategy_latency(reader)
         demo_strategy_money(reader)
         demo_strategy_blended(reader)
+        demo_video_decodable(reader)
 
 
 if __name__ == "__main__":

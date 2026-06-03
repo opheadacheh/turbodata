@@ -107,6 +107,33 @@ def demo_strategy(reader: Reader) -> None:
     print_results("/imu", [200, 500, 800], out[0])
 
 
+def demo_video_decodable(reader: Reader) -> None:
+    """GOP-prefix sampling on /cam/h264 (GOP A at ts 100..400, GOP B at 500..800).
+
+    Without video_decodable, a video topic samples like any other topic: each
+    result is the single floor frame in data (possibly a non-key frame a
+    decoder can't start from). With it, each result instead carries a
+    decoder-ready GOP sequence in frames (and data is empty): the first result
+    in each GOP sets reset_decoder=True with the whole prefix [keyframe ...
+    target]; later results in the same GOP set reset_decoder=False with only
+    the new frames since the previous query.
+    """
+    section("video: GOP-prefix sampling (video_decodable=True)")
+    ts = [350, 650]
+    out = reader.sample(
+        [SampleQuery(topic="/cam/h264", timestamps=ts)], video_decodable=True
+    )
+    for q, res in zip(ts, out[0]):
+        if not res.found:
+            print(f"  /cam/h264@T={q:<4}  (no key frame at or before T)")
+            continue
+        frame_ts = [f.timestamp for f in res.frames]
+        print(
+            f"  /cam/h264@T={q:<4}  -> target ts={res.timestamp} "
+            f"reset={res.reset_decoder!s:<5} frames={frame_ts}"
+        )
+
+
 def main() -> None:
     with FileReadSource(IN_PATH) as src:
         reader = Reader(src)
@@ -116,6 +143,7 @@ def main() -> None:
         demo_multi_topic(reader)
         demo_edge_cases(reader)
         demo_strategy(reader)
+        demo_video_decodable(reader)
 
 
 if __name__ == "__main__":

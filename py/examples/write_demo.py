@@ -14,11 +14,12 @@
 
 """Example: write a turbodata file. Mirrors go/examples/write/main.go.
 
-Produces examples/demo.td with three topic groups:
+Produces examples/demo.td with four topic groups:
 
   Group A  /imu                 uncompressed, size-based default chunking
   Group B  /cam/front           compressed,   count=3 chunks
   Group C  /odom, /gps          compressed,   count=4 chunks (two-topic group)
+  Group D  /cam/h264            video,        two GOPs (key-frame gated chunking)
 
 Run from the py/ directory:
     python examples/write_demo.py
@@ -86,11 +87,32 @@ def write_odom_gps_group(w: Writer) -> None:
     w.close_topic()
 
 
+def write_video_group(w: Writer) -> None:
+    """A single video topic. A video group must hold exactly one topic and must
+    not be compressed; frames are written with write_video_message (NOT
+    write_message), which carries the is_key_frame flag. The first frame MUST be
+    a key frame. The writer gates chunk boundaries on key frames, so a GOP is
+    never split across chunks. Two GOPs (A: ts 100..400, B: ts 500..800) let the
+    read/sample demos show key-frame snap-back and GOP-prefix sampling."""
+    w.open_topics(["/cam/h264"], [{"hz": 10, "codec": "h264"}], video=True)
+    frames = [
+        (100, True), (200, False), (300, False), (400, False),  # GOP A
+        (500, True), (600, False), (700, False), (800, False),  # GOP B
+    ]
+    for ts, is_key in frames:
+        kind = "K" if is_key else "P"
+        # Pad the payload so it looks like a coded frame rather than a label.
+        msg = f"{kind}{ts}-".encode() + b"\x00" * 32
+        w.write_video_message("/cam/h264", msg, ts, is_key)
+    w.close_topic()
+
+
 def main() -> None:
     with open(OUT_PATH, "wb") as f, Writer(f) as w:
         write_imu_group(w)
         write_cam_group(w)
         write_odom_gps_group(w)
+        write_video_group(w)
 
     size = os.path.getsize(OUT_PATH)
     print(f"wrote {OUT_PATH} ({size} bytes)")
