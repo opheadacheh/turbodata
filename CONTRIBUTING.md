@@ -103,18 +103,20 @@ cd py && pytest -q
 cd ts && npm test
 ```
 
-> **Important — `.td` binaries are not byte-reproducible.** Compressed fixtures
-> use zstd, whose output is not guaranteed identical across library versions or
-> even runs. Do **not** assert on `git diff` of the `.td` files. The decoded
-> stream is deterministic, so the committed `.golden.txt` files *are* stable —
+> **Important — `.td` binaries can differ across zstd versions.** zstd is
+> deterministic for a given library version, so regenerating the fixtures with
+> the same zstd produces byte-identical `.td` files. The bytes can still differ
+> across zstd library versions, however, so do **not** rely on `git diff` of the
+> `.td` files as a portable check. The decoded stream is independent of the
+> compressor, so the committed `.golden.txt` files *are* stable across versions —
 > CI regenerates fixtures and diffs only the `*.golden.txt` files to confirm the
 > Go writer still produces the expected decoded output.
 
 After regenerating locally, restore the working tree so you don't accidentally
-commit nondeterministic binary churn or the generated demo file:
+commit version-dependent binary churn or the generated demo file:
 
 ```bash
-git checkout ts/test/fixtures   # discard nondeterministic .td churn
+git checkout ts/test/fixtures   # discard zstd-version-dependent .td churn
 rm -f go/examples/demo.td        # not tracked; do not commit
 ```
 

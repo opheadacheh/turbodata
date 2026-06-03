@@ -78,8 +78,10 @@ jobs:
           cache: npm
           cache-dependency-path: ts/package-lock.json
       # Regenerate fixtures from the Go reference writer and confirm the
-      # deterministic golden files are unchanged. The .td binaries use zstd and
-      # are not byte-reproducible, so only the *.golden.txt files are diffed.
+      # deterministic golden files are unchanged. The .td binaries use zstd,
+      # which is byte-reproducible for a given zstd version but can differ
+      # across versions, so only the version-independent *.golden.txt files
+      # are diffed.
       - name: Regenerate fixtures and verify goldens
         working-directory: go
         run: |
