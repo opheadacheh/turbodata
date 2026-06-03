@@ -128,7 +128,7 @@ intentionally changed the on-disk format).
   e.g. for Go/TypeScript:
 
   ```go
-  // Copyright 2026 Wanjia He
+  // Copyright 2026 <YOUR NAME>
   //
   // Licensed under the Apache License, Version 2.0 (the "License");
   // you may not use this file except in compliance with the License.

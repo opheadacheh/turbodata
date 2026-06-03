@@ -24,6 +24,11 @@ turbodata is a container format built specifically for **read-efficient,
 random access** over exactly this kind of data, on both local disk and remote
 object storage, from multiple languages (including the browser).
 
+If you need a bigger picture where turbodata is heading, the post from Rerun.io
+https://rerun.io/blog/data-layer-tax very well summarized the data layer 
+challenges Physical AI is currently facing. Turbodata is developed to serve as
+the underlying data format for next-gen data infra to scale up.
+
 ### Goals
 
 - Fast topic- and time-bounded random reads without scanning the whole file.
@@ -31,7 +36,6 @@ object storage, from multiple languages (including the browser).
 - Efficient reads over high-latency / paid object storage.
 - Identical on-disk format across languages, so a file written anywhere reads
   anywhere — including read-only in the browser.
-- Single-pass streaming writes.
 
 ### Non-goals
 
