@@ -132,9 +132,10 @@ func (r *Reader) exposedSummary(summary *format.Summary) (*format.Summary, error
 				name = v
 			}
 			nti.TopicMetadatas[j] = &format.TopicMetadata{
-				Id:       tm.Id,
-				Name:     name,
-				Metadata: tm.Metadata,
+				Id:           tm.Id,
+				Name:         name,
+				Metadata:     tm.Metadata,
+				MessageCount: tm.MessageCount,
 			}
 		}
 		out.TopicsInfos[i] = nti

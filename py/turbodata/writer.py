@@ -95,6 +95,9 @@ class Writer:
         # for the in-progress chunk. Reset per topic at chunk flush. Non-video
         # topics keep empty lists.
         self._id_to_key_frame_indexes: Dict[int, List[int]] = {}
+        # Running total of messages written per topic over the Writer's
+        # lifetime. Persisted as TopicMetadata.message_count at close.
+        self._id_to_message_count: Dict[int, int] = {}
 
         # Topic-group-level state.
         self._last_timestamp: int = 0
@@ -193,6 +196,7 @@ class Writer:
             self._topic_ids.append(tid)
             self._id_to_message_indexes[tid] = []
             self._id_to_key_frame_indexes[tid] = []
+            self._id_to_message_count[tid] = 0
             self._opened_names.add(name)
 
         self._summary.topics_infos.append(
@@ -227,6 +231,7 @@ class Writer:
         self._id_to_message_indexes[tid].append(
             _codec.MessageIndex(timestamp=timestamp, offset_in_chunk=self._buf.tell())
         )
+        self._id_to_message_count[tid] += 1
         self._buf.write(message)
 
         assert self._chunk_status is not None
@@ -294,6 +299,7 @@ class Writer:
         self._id_to_message_indexes[tid].append(
             _codec.MessageIndex(timestamp=timestamp, offset_in_chunk=self._buf.tell())
         )
+        self._id_to_message_count[tid] += 1
         if is_key_frame:
             self._id_to_key_frame_indexes[tid].append(
                 len(self._id_to_message_indexes[tid]) - 1
@@ -349,6 +355,11 @@ class Writer:
         if self._is_topic_open:
             raise TopicNotClosedError("topic not closed; call close_topic first")
         self._write_index_chunks()
+        # Stamp the per-topic message counts onto the summary now that no
+        # further writes can happen.
+        for ti in self._summary.topics_infos:
+            for tm in ti.topic_metadatas:
+                tm.message_count = self._id_to_message_count[tm.id]
         self._write_summary()
         self._write_footer()
         # No flush call: the caller owns the underlying file/stream.

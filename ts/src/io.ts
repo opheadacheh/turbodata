@@ -143,7 +143,8 @@ export function readTopicMetadata(r: BinaryReader): TopicMetadata {
   const id = r.readUint16();
   const name = readString(r);
   const metadata = readMap(r);
-  return { id, name, metadata };
+  const messageCount = r.readUint32();
+  return { id, name, metadata, messageCount };
 }
 
 export function readIndexChunkInfo(r: BinaryReader): IndexChunkInfo {

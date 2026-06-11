@@ -312,6 +312,7 @@ export class Reader {
           id: tm.id,
           name: this.topicRemap!.get(tm.name) ?? tm.name,
           metadata: tm.metadata,
+          messageCount: tm.messageCount,
         })),
         indexChunkInfoList: ti.indexChunkInfoList,
         totalLen: ti.totalLen,

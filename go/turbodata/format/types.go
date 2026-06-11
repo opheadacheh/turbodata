@@ -61,6 +61,8 @@ type TopicMetadata struct {
 	Id       uint16
 	Name     string
 	Metadata map[string]any
+	// MessageCount is the number of messages written into this topic.
+	MessageCount uint32
 }
 
 type IndexChunkInfo struct {

@@ -634,4 +634,37 @@ func TestRoundTrip(t *testing.T) {
 			t.Errorf("data mismatch: want %q, got %q", payload, msgs[0].data)
 		}
 	})
+
+	t.Run("message_count_persisted_per_topic_across_groups", func(t *testing.T) {
+		r := writerRoundTrip(t, func(w *Writer) {
+			// Group 1: "a" gets 3 messages, "b" gets 1.
+			mustOpenTopics(t, w, []string{"a", "b"}, []map[string]any{{}, {}})
+			mustWriteMessage(t, w, "a", []byte("a1"), 1)
+			mustWriteMessage(t, w, "b", []byte("b1"), 2)
+			mustWriteMessage(t, w, "a", []byte("a2"), 3)
+			mustWriteMessage(t, w, "a", []byte("a3"), 4)
+			mustCloseTopic(t, w)
+			// Group 2: "c" gets 0 messages.
+			mustOpenTopics(t, w, []string{"c"}, []map[string]any{{}})
+			mustCloseTopic(t, w)
+			mustClose(t, w)
+		})
+
+		summary, err := r.Summary()
+		if err != nil {
+			t.Fatalf("Summary: %v", err)
+		}
+		got := map[string]uint32{}
+		for _, ti := range summary.TopicsInfos {
+			for _, tm := range ti.TopicMetadatas {
+				got[tm.Name] = tm.MessageCount
+			}
+		}
+		want := map[string]uint32{"a": 3, "b": 1, "c": 0}
+		for name, count := range want {
+			if got[name] != count {
+				t.Errorf("topic %q: want MessageCount %d, got %d", name, count, got[name])
+			}
+		}
+	})
 }

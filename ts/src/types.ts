@@ -49,6 +49,8 @@ export interface TopicMetadata {
    * `useBigInt64: true`); smaller integers stay as number.
    */
   metadata: Map<string, unknown>;
+  /** uint32. Number of messages written into this topic. */
+  messageCount: number;
 }
 
 export interface IndexChunkInfo {

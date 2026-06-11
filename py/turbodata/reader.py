@@ -214,6 +214,7 @@ class Reader:
                     id=tm.id,
                     name=self._topic_remap.get(tm.name, tm.name),
                     metadata=tm.metadata,
+                    message_count=tm.message_count,
                 )
                 for tm in ti.topic_metadatas
             ]

@@ -57,6 +57,8 @@ class TopicMetadata:
     id: int
     name: str
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # Number of messages written into this topic.
+    message_count: int = 0
 
 
 @dataclass
@@ -198,13 +200,17 @@ def read_topic_metadata(r: BinaryIO) -> TopicMetadata:
     tid = _read_u16(r)
     name = _read_string(r)
     metadata = _read_map(r)
-    return TopicMetadata(id=tid, name=name, metadata=metadata)
+    message_count = _read_u32(r)
+    return TopicMetadata(
+        id=tid, name=name, metadata=metadata, message_count=message_count
+    )
 
 
 def write_topic_metadata(w: BinaryIO, tm: TopicMetadata) -> None:
     _write_u16(w, tm.id)
     _write_string(w, tm.name)
     _write_map(w, tm.metadata)
+    _write_u32(w, tm.message_count)
 
 
 # ---------------------------------------------------------------------------

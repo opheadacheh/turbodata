@@ -126,6 +126,9 @@ func ReadTopicMetadata(r io.Reader) (*TopicMetadata, error) {
 	if topicMetadata.Metadata, err = readMap(r); err != nil {
 		return nil, err
 	}
+	if err := binary.Read(r, binary.BigEndian, &topicMetadata.MessageCount); err != nil {
+		return nil, err
+	}
 	return topicMetadata, nil
 }
 
@@ -136,7 +139,10 @@ func WriteTopicMetadata(w io.Writer, topicMetadata *TopicMetadata) error {
 	if err := writeString(w, topicMetadata.Name); err != nil {
 		return err
 	}
-	return writeMap(w, topicMetadata.Metadata)
+	if err := writeMap(w, topicMetadata.Metadata); err != nil {
+		return err
+	}
+	return binary.Write(w, binary.BigEndian, topicMetadata.MessageCount)
 }
 
 func ReadIndexChunkInfo(r io.Reader) (*IndexChunkInfo, error) {

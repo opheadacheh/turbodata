@@ -133,6 +133,28 @@ class TestOpenTopics:
         assert [tm.id for tm in summary.topics_infos[0].topic_metadatas] == [1]
         assert [tm.id for tm in summary.topics_infos[1].topic_metadatas] == [2, 3]
 
+    def test_message_count_persisted_per_topic_across_groups(self):
+        buf = io.BytesIO()
+        w = Writer(buf)
+        # Group 1: "a" gets 3 messages, "b" gets 1.
+        w.open_topics(["a", "b"], [{}, {}])
+        w.write_message("a", b"a1", 1)
+        w.write_message("b", b"b1", 2)
+        w.write_message("a", b"a2", 3)
+        w.write_message("a", b"a3", 4)
+        w.close_topic()
+        # Group 2: "c" gets 0 messages.
+        w.open_topics(["c"], [{}])
+        w.close_topic()
+        w.close()
+        summary = Reader(BytesReadSource(buf.getvalue())).summary()
+        counts = {
+            tm.name: tm.message_count
+            for ti in summary.topics_infos
+            for tm in ti.topic_metadatas
+        }
+        assert counts == {"a": 3, "b": 1, "c": 0}
+
 
 # ---------------------------------------------------------------------------
 # write_message: state + validation

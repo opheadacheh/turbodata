@@ -174,6 +174,7 @@ class TestTopicMetadata:
                 id=42,
                 name="/topic_with_unicode_名前",
                 metadata={"a": "b", "c": 1, "d": True},
+                message_count=12345,
             ),
         ],
         ids=["empty_metadata", "max_id", "unicode_name"],
@@ -186,6 +187,7 @@ class TestTopicMetadata:
         assert got.id == tm.id
         assert got.name == tm.name
         assert got.metadata == tm.metadata
+        assert got.message_count == tm.message_count
 
 
 # ---------------------------------------------------------------------------

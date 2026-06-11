@@ -221,7 +221,7 @@ func TestTopicMetadata(t *testing.T) {
 			name string
 			tm   *TopicMetadata
 		}{
-			{"populated", &TopicMetadata{Id: 42, Name: "camera/front", Metadata: map[string]any{"encoding": "jpeg"}}},
+			{"populated", &TopicMetadata{Id: 42, Name: "camera/front", Metadata: map[string]any{"encoding": "jpeg"}, MessageCount: 12345}},
 			{"empty_name_and_metadata", &TopicMetadata{Id: 1, Name: "", Metadata: map[string]any{}}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {

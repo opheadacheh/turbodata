@@ -52,6 +52,9 @@ type Writer struct {
 	// (indexes into idToMessageIndexes[id]) for the in-progress chunk.
 	// Reset per topic at chunk flush. Non-video topics never populate this.
 	idToKeyFrameIndexes map[uint16][]uint32
+	// idToMessageCount is the running total of messages written per topic over
+	// the Writer's lifetime. Persisted as TopicMetadata.MessageCount at close.
+	idToMessageCount map[uint16]uint32
 
 	// Topic-level state.
 	lastTimestamp int64
@@ -88,6 +91,7 @@ func NewWriter(w io.Writer) *Writer {
 		},
 		idToMessageIndexes:  make(map[uint16][]format.MessageIndex),
 		idToKeyFrameIndexes: make(map[uint16][]uint32),
+		idToMessageCount:    make(map[uint16]uint32),
 		openedNames:         make(map[string]struct{}),
 	}
 }
@@ -162,6 +166,7 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 		topicIds[i] = w.currentTopicId
 		w.idToMessageIndexes[w.currentTopicId] = []format.MessageIndex{}
 		w.idToKeyFrameIndexes[w.currentTopicId] = []uint32{}
+		w.idToMessageCount[w.currentTopicId] = 0
 		w.openedNames[names[i]] = struct{}{}
 	}
 
@@ -229,6 +234,7 @@ func (w *Writer) WriteMessage(topicName string, message []byte, timestamp int64)
 		Timestamp:     timestamp,
 		OffsetInChunk: int64(w.buf.Len()),
 	})
+	w.idToMessageCount[id]++
 
 	w.buf.Write(message)
 
@@ -311,6 +317,7 @@ func (w *Writer) WriteVideoMessage(topicName string, message []byte, timestamp i
 		Timestamp:     timestamp,
 		OffsetInChunk: offsetInChunk,
 	})
+	w.idToMessageCount[id]++
 	if isKeyFrame {
 		// uint32: per-chunk message-index position of this key frame.
 		// Wire format reserves uint32; chunks holding > 4 G messages of one
@@ -478,6 +485,14 @@ func (w *Writer) writeIndexChunks() error {
 }
 
 func (w *Writer) writeSummary() error {
+	// Stamp the per-topic message counts onto the summary now that no further
+	// writes can happen.
+	for _, topicsInfo := range w.summary.TopicsInfos {
+		for _, topicMetadata := range topicsInfo.TopicMetadatas {
+			topicMetadata.MessageCount = w.idToMessageCount[topicMetadata.Id]
+		}
+	}
+
 	if err := format.WriteSummary(w.buf, w.summary); err != nil {
 		return err
 	}

@@ -134,6 +134,7 @@ TopicMetadata:
   uint16                  id
   string                  name
   map                     metadata            # caller-supplied, plus control flags (see below)
+  uint32                  message_count       # number of messages written into this topic
 
 IndexChunkInfo:             # 24 bytes
   int64                   start_timestamp     # min timestamp in the index chunk
