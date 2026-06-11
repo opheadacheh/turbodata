@@ -48,6 +48,7 @@ from .errors import (
     TopicAlreadyClosedError,
     TopicAlreadyOpenError,
     TopicNotClosedError,
+    TopicNameAlreadyOpenedError,
     TopicNotOpenedError,
     TopicNotRegisteredError,
     VideoGroupMustBeSingleTopicError,
@@ -110,6 +111,10 @@ class Writer:
         self._current_topic_id: int = 0
         self._index_chunks_list: List[List[_codec.IndexChunk]] = []
 
+        # Every topic name opened over the Writer's lifetime, so the same name
+        # cannot be opened twice.
+        self._opened_names: set[str] = set()
+
     # ---- public ---------------------------------------------------------
     def open_topics(
         self,
@@ -128,6 +133,18 @@ class Writer:
             )
         if not names:
             raise NoTopicsToOpenError("no topics to open")
+
+        # Each topic name must be unique for the lifetime of the Writer. Reject
+        # names already opened by an earlier group as well as duplicates within
+        # this call. Validate up front so a rejected call leaves the Writer
+        # unchanged and reusable.
+        seen: set[str] = set()
+        for name in names:
+            if name in self._opened_names or name in seen:
+                raise TopicNameAlreadyOpenedError(
+                    f"topic name already opened: {name!r}"
+                )
+            seen.add(name)
 
         # Video groups are constrained: exactly one topic, never co-compressed
         # (the codec already compresses the bytes, and chunk-level compression
@@ -176,6 +193,7 @@ class Writer:
             self._topic_ids.append(tid)
             self._id_to_message_indexes[tid] = []
             self._id_to_key_frame_indexes[tid] = []
+            self._opened_names.add(name)
 
         self._summary.topics_infos.append(
             _codec.TopicsInfo(

@@ -39,6 +39,7 @@ from turbodata import (
     TimestampDecreasesError,
     TopicAlreadyClosedError,
     TopicAlreadyOpenError,
+    TopicNameAlreadyOpenedError,
     TopicNotClosedError,
     TopicNotOpenedError,
     TopicNotRegisteredError,
@@ -73,6 +74,25 @@ class TestOpenTopics:
         w.open_topics(["a"], [{}])
         with pytest.raises(TopicAlreadyOpenError):
             w.open_topics(["b"], [{}])
+
+    def test_error_when_name_reopened_after_close(self):
+        w = Writer(io.BytesIO())
+        w.open_topics(["a"], [{}])
+        w.close_topic()
+        with pytest.raises(TopicNameAlreadyOpenedError):
+            w.open_topics(["a"], [{}])
+
+    def test_error_when_name_duplicated_within_call(self):
+        w = Writer(io.BytesIO())
+        with pytest.raises(TopicNameAlreadyOpenedError):
+            w.open_topics(["a", "a"], [{}, {}])
+
+    def test_reusable_after_duplicate_rejected(self):
+        w = Writer(io.BytesIO())
+        with pytest.raises(TopicNameAlreadyOpenedError):
+            w.open_topics(["a", "a"], [{}, {}])
+        # A rejected call must leave the Writer unchanged and reusable.
+        w.open_topics(["a", "b"], [{}, {}])
 
     def test_error_names_metadatas_length_mismatch(self):
         w = Writer(io.BytesIO())

@@ -36,6 +36,14 @@ class NoTopicsToOpenError(TurbodataError):
     pass
 
 
+class TopicNameAlreadyOpenedError(TurbodataError):
+    """Raised by Writer.open_topics when a topic name has already been opened
+    by this Writer (in this or an earlier group), or when the same name appears
+    more than once in a single open_topics call. Each topic name must be unique
+    for the lifetime of a Writer. Mirrors go ErrTopicNameAlreadyOpened.
+    """
+
+
 class TopicNotOpenedError(TurbodataError):
     pass
 

@@ -99,6 +99,37 @@ func TestOpenTopics(t *testing.T) {
 		}
 	})
 
+	t.Run("error_when_name_reopened_after_close", func(t *testing.T) {
+		w := NewWriter(&bytes.Buffer{})
+		mustOpenTopics(t, w, []string{"a"}, []map[string]any{{}})
+		if err := w.CloseTopic(); err != nil {
+			t.Fatalf("unexpected error closing topic: %v", err)
+		}
+		err := w.OpenTopics([]string{"a"}, []map[string]any{{}})
+		if !errors.Is(err, ErrTopicNameAlreadyOpened) {
+			t.Errorf("expected ErrTopicNameAlreadyOpened, got %v", err)
+		}
+	})
+
+	t.Run("error_when_name_duplicated_within_call", func(t *testing.T) {
+		w := NewWriter(&bytes.Buffer{})
+		err := w.OpenTopics([]string{"a", "a"}, []map[string]any{{}, {}})
+		if !errors.Is(err, ErrTopicNameAlreadyOpened) {
+			t.Errorf("expected ErrTopicNameAlreadyOpened, got %v", err)
+		}
+	})
+
+	t.Run("reusable_after_duplicate_rejected", func(t *testing.T) {
+		w := NewWriter(&bytes.Buffer{})
+		if err := w.OpenTopics([]string{"a", "a"}, []map[string]any{{}, {}}); err == nil {
+			t.Fatal("expected error for duplicate name")
+		}
+		// A rejected call must leave the Writer unchanged and reusable.
+		if err := w.OpenTopics([]string{"a", "b"}, []map[string]any{{}, {}}); err != nil {
+			t.Fatalf("unexpected error after rejected call: %v", err)
+		}
+	})
+
 	t.Run("error_names_metadatas_length_mismatch", func(t *testing.T) {
 		w := NewWriter(&bytes.Buffer{})
 		err := w.OpenTopics([]string{"a", "b"}, []map[string]any{{}})

@@ -65,6 +65,10 @@ type Writer struct {
 	footer          *format.Footer
 	summary         *format.Summary
 	indexChunksList [][]*format.IndexChunk
+
+	// openedNames tracks every topic name opened over the Writer's lifetime so
+	// that the same name cannot be opened twice.
+	openedNames map[string]struct{}
 }
 
 func NewWriter(w io.Writer) *Writer {
@@ -84,6 +88,7 @@ func NewWriter(w io.Writer) *Writer {
 		},
 		idToMessageIndexes:  make(map[uint16][]format.MessageIndex),
 		idToKeyFrameIndexes: make(map[uint16][]uint32),
+		openedNames:         make(map[string]struct{}),
 	}
 }
 
@@ -96,6 +101,21 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 	}
 	if len(names) == 0 {
 		return ErrNoTopicsToOpen
+	}
+
+	// Each topic name must be unique for the lifetime of the Writer. Reject
+	// names already opened by an earlier group as well as duplicates within
+	// this call. Validate up front so a rejected call leaves the Writer
+	// unchanged and reusable.
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if _, ok := w.openedNames[name]; ok {
+			return fmt.Errorf("topic %q: %w", name, ErrTopicNameAlreadyOpened)
+		}
+		if _, ok := seen[name]; ok {
+			return fmt.Errorf("topic %q: %w", name, ErrTopicNameAlreadyOpened)
+		}
+		seen[name] = struct{}{}
 	}
 
 	w.isTopicOpen = true
@@ -142,6 +162,7 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 		topicIds[i] = w.currentTopicId
 		w.idToMessageIndexes[w.currentTopicId] = []format.MessageIndex{}
 		w.idToKeyFrameIndexes[w.currentTopicId] = []uint32{}
+		w.openedNames[names[i]] = struct{}{}
 	}
 
 	w.summary.TopicsInfos = append(w.summary.TopicsInfos, &format.TopicsInfo{
