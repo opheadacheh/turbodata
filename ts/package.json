@@ -1,6 +1,6 @@
 {
   "name": "turbodata",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Browser TypeScript reader for the turbodata format.",
   "license": "Apache-2.0",
   "author": "Wanjia He",

@@ -49,18 +49,30 @@ builds the sdist+wheel and publishes them.
 
 ## TypeScript (npm)
 
-One-time setup: create an npm **automation** access token and add it as the
-repository secret `NPM_TOKEN`.
+Publishing uses **npm Trusted Publishing (OIDC)** — no `NPM_TOKEN` secret.
+For a new package, publish the first version manually after enabling account
+2FA (`npm login`, then build, test, and `npm publish --access public` in `ts`).
+Once the package exists, open its Settings → Trusted Publisher on npmjs.com,
+select GitHub Actions, and configure:
+
+- Organization or user: `opheadacheh`, Repository: `turbodata`
+- Workflow filename: `publish-npm.yml`, Environment name: leave empty
+- Allow direct publishing with `npm publish` if the option is shown.
+
+The workflow uses Node.js 24 and npm 11 to support OIDC authentication. See
+the [npm Trusted Publishing documentation](https://docs.npmjs.com/trusted-publishers/).
+For subsequent releases, choose a version that has not already been published:
 
 ```bash
-# 1. bump version in ts/package.json
-# 2. tag and push
-git tag ts-v0.1.0
-git push origin ts-v0.1.0
+# 1. update ts/package.json and ts/package-lock.json (from ts: npm version patch --no-git-tag-version)
+# 2. update CHANGELOG.md and commit the release changes, including this workflow
+# 3. tag the release commit and push (example after a manual 0.1.0 release)
+git tag ts-v0.1.1
+git push origin ts-v0.1.1
 ```
 
 [`.github/workflows/publish-npm.yml`](./.github/workflows/publish-npm.yml) runs
-`npm ci`, `npm run build`, and `npm publish --provenance --access public`.
+`npm ci`, `npm run build`, `npm test`, and `npm publish --provenance --access public`.
 
 ## Checklist
 

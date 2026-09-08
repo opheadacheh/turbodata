@@ -1,8 +1,7 @@
 name: Publish npm
 
-# Triggered by pushing a `ts-vX.Y.Z` tag. Requires the repository secret
-# `NPM_TOKEN` (an npm automation access token). `id-token: write` enables
-# npm package provenance.
+# Triggered by pushing a `ts-vX.Y.Z` tag. Uses npm Trusted Publishing
+# (OIDC), configured for this workflow with no environment name.
 
 on:
   push:
@@ -20,8 +19,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: https://registry.npmjs.org
+      - name: Install npm with Trusted Publishing support
+        run: npm install --global npm@11
       - name: Install, build, test, and publish
         working-directory: ts
         run: |
@@ -29,5 +30,3 @@ jobs:
           npm run build
           npm test
           npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
