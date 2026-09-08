@@ -1,6 +1,6 @@
 module github.com/opheadacheh/turbodata/go/cmd
 
-go 1.26.1
+go 1.25.0
 
 require github.com/opheadacheh/turbodata/go/turbodata v0.0.0
 

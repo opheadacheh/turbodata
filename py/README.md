@@ -39,6 +39,24 @@ with open("out.td", "wb") as f, Writer(f) as w:
 
 The writer enforces non-decreasing timestamps within an open topic group.
 
+### Schema metadata
+
+Supply `schema_name`, `schema_encoding`, and binary `schema_data` per topic
+for downstream schema discovery. Missing, null, or empty values produce one
+warning per topic when opening it; writing continues by default. The minimal
+examples above omit these fields and therefore warn. Reading does not warn.
+
+```python
+from turbodata import META_KEY_SCHEMA_NAME, META_KEY_SCHEMA_ENCODING, META_KEY_SCHEMA_DATA
+
+metadata = {
+    META_KEY_SCHEMA_NAME: "Example",
+    META_KEY_SCHEMA_ENCODING: "jsonschema",
+    META_KEY_SCHEMA_DATA: b'{"type":"object"}',
+}
+# Pass metadata as the corresponding entry in open_topics' metadatas list.
+```
+
 ### Chunk config
 
 Chunks are the unit of indexing and I/O. By default the writer flushes a chunk

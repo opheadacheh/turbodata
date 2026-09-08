@@ -34,6 +34,9 @@ Quick start:
         w.close_topic()
 """
 from ._codec import (
+    META_KEY_SCHEMA_NAME,
+    META_KEY_SCHEMA_ENCODING,
+    META_KEY_SCHEMA_DATA,
     Footer,
     IndexChunk,
     IndexChunkInfo,
@@ -87,6 +90,9 @@ from .strategy import (
 from .writer import Writer
 
 __all__ = [
+    "META_KEY_SCHEMA_NAME",
+    "META_KEY_SCHEMA_ENCODING",
+    "META_KEY_SCHEMA_DATA",
     # Reader / writer
     "Reader",
     "MultiReader",

@@ -1,6 +1,6 @@
 module github.com/opheadacheh/turbodata/go/examples
 
-go 1.26.1
+go 1.25.0
 
 require (
 	github.com/foxglove/mcap/go/mcap v1.7.4

@@ -31,6 +31,11 @@ import msgpack
 MAGIC: bytes = b"7URB0"
 FOOTER_LEN: int = 13  # int64 SummaryLen + 5-byte Magic
 
+# Common per-topic schema metadata keys. SCHEMA_DATA holds raw schema bytes.
+META_KEY_SCHEMA_NAME: str = "schema_name"
+META_KEY_SCHEMA_ENCODING: str = "schema_encoding"
+META_KEY_SCHEMA_DATA: str = "schema_data"
+
 # Internal per-topic metadata keys used to carry write-format control flags
 # alongside caller-supplied metadata. The __td_ prefix namespaces them away
 # from user keys. META_KEY_COMPRESSED and META_KEY_VIDEO are read back by the

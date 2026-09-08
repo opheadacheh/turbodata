@@ -17,7 +17,12 @@ package turbodata
 import (
 	"bytes"
 	"errors"
+	"log"
+	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/opheadacheh/turbodata/go/turbodata/format"
 )
 
 // errWriter always returns a write error, used to test error propagation.
@@ -667,4 +672,52 @@ func TestRoundTrip(t *testing.T) {
 			}
 		}
 	})
+}
+
+// Schema warnings help producers discover incomplete files without rejecting raw data.
+func TestSchemaMetadataWarnings(t *testing.T) {
+	var logs bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(old)
+	keys := []string{format.MetaKeySchemaName, format.MetaKeySchemaEncoding, format.MetaKeySchemaData}
+	complete := map[string]any{keys[0]: "Example", keys[1]: "jsonschema", keys[2]: []byte(`{"type":"object"}`)}
+	metas := []map[string]any{complete, {}, {keys[0]: "", keys[1]: nil, keys[2]: []byte{}}, {keys[0]: "Example", keys[1]: "jsonschema"}}
+	r := writerRoundTrip(t, func(w *Writer) {
+		mustOpenTopics(t, w, []string{"complete", "missing", "empty", "partial"}, metas)
+		for _, name := range []string{"complete", "missing", "empty", "partial"} {
+			mustWriteMessage(t, w, name, []byte("payload"), 1)
+		}
+		mustCloseTopic(t, w)
+		mustClose(t, w)
+	})
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected one warning per incomplete topic, got %q", logs.String())
+	}
+	for i, name := range []string{"missing", "empty", "partial"} {
+		want := "[schema_name schema_encoding schema_data]"
+		if name == "partial" {
+			want = "[schema_data]"
+		}
+		if !strings.Contains(lines[i], `topic "`+name+`"`) || !strings.Contains(lines[i], want) {
+			t.Fatalf("unexpected warning: %s", lines[i])
+		}
+	}
+	logs.Reset()
+	summary, err := r.Summary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(summary.TopicsInfos[0].TopicMetadatas[0].Metadata, complete) {
+		t.Fatal("schema metadata changed during roundtrip")
+	}
+	for _, tm := range summary.TopicsInfos[0].TopicMetadatas {
+		if tm.MessageCount != 1 {
+			t.Fatal("warning prevented writing")
+		}
+	}
+	if logs.Len() != 0 {
+		t.Fatal("reading incomplete metadata must not warn")
+	}
 }

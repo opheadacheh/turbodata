@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"math"
 
 	"github.com/opheadacheh/turbodata/go/turbodata/format"
@@ -148,6 +149,27 @@ func (w *Writer) OpenTopics(names []string, metadatas []map[string]any, opts ...
 		}
 		if v, ok := metadatas[0][format.MetaKeyCompressed].(bool); ok && v {
 			return ErrVideoTopicCannotBeCompressed
+		}
+	}
+
+	for i, name := range names {
+		var missing []string
+		for _, key := range []string{format.MetaKeySchemaName, format.MetaKeySchemaEncoding, format.MetaKeySchemaData} {
+			switch v := metadatas[i][key].(type) {
+			case nil:
+				missing = append(missing, key)
+			case string:
+				if v == "" {
+					missing = append(missing, key)
+				}
+			case []byte:
+				if len(v) == 0 {
+					missing = append(missing, key)
+				}
+			}
+		}
+		if len(missing) > 0 {
+			log.Printf("WARNING turbodata: topic %q: missing or empty schema metadata %v; downstream decoding may be affected", name, missing)
 		}
 	}
 

@@ -48,6 +48,23 @@ if err := w.Close(); err != nil {
 
 The writer enforces non-decreasing timestamps within an open topic group.
 
+### Schema metadata
+
+Supply `schema_name`, `schema_encoding`, and binary `schema_data` per topic
+for downstream schema discovery. Missing, null, or empty values produce one
+warning per topic when opening it; writing continues by default. The minimal
+examples above omit these fields and therefore warn. Reading does not warn.
+
+```go
+// Import github.com/opheadacheh/turbodata/go/turbodata/format.
+metadata := map[string]any{
+    format.MetaKeySchemaName: "Example",
+    format.MetaKeySchemaEncoding: "jsonschema",
+    format.MetaKeySchemaData: []byte(`{"type":"object"}`),
+}
+// Pass metadata as the corresponding entry in OpenTopics' metadatas slice.
+```
+
 ### Chunk config
 
 Chunks are the unit of indexing and I/O. By default the writer flushes a chunk

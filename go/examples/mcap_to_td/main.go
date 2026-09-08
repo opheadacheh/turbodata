@@ -50,6 +50,7 @@ import (
 	"log"
 	"os"
 	"github.com/opheadacheh/turbodata/go/turbodata"
+	"github.com/opheadacheh/turbodata/go/turbodata/format"
 
 	"github.com/foxglove/mcap/go/mcap"
 )
@@ -189,9 +190,9 @@ func writeGroup(
 	metadatas := make([]map[string]any, len(g.topics))
 	for i := range metadatas {
 		metadatas[i] = map[string]any{
-			"schema_name":     g.schema.Name,
-			"schema_encoding": g.schema.Encoding,
-			"schema_data":     g.schema.Data,
+			format.MetaKeySchemaName:     g.schema.Name,
+			format.MetaKeySchemaEncoding: g.schema.Encoding,
+			format.MetaKeySchemaData:     g.schema.Data,
 		}
 	}
 

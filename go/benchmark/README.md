@@ -22,7 +22,7 @@ These numbers come from the reference dataset described in
 [Prerequisites](#prerequisites). Reproduce them with the commands in
 [Generating a markdown report](#generating-a-markdown-report).
 
-**Environment.** Intel i5-12400F (12 threads), Go 1.26.1, Ubuntu 24.04 (WSL2),
+**Environment.** Intel i5-12400F (12 threads), go 1.25.0, Ubuntu 24.04 (WSL2),
 warm OS page cache. Source MCAP: `go/test.mcap` (717 MiB, 6 image topics,
 15 non-image topics, 28.5 s span), with `-mock-image-size=60KB` (default)
 applied so image payloads are realistically incompressible. Working

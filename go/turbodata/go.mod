@@ -1,6 +1,6 @@
 module github.com/opheadacheh/turbodata/go/turbodata
 
-go 1.26.1
+go 1.25.0
 
 require (
 	github.com/google/go-cmp v0.7.0

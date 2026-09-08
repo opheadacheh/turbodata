@@ -96,6 +96,11 @@ export const MAGIC: Uint8Array = new Uint8Array([0x37, 0x55, 0x52, 0x42, 0x30]);
 /** Footer is fixed at 13 bytes: 8 (summaryLen) + 5 (magic). */
 export const FOOTER_LEN = 13;
 
+// Common per-topic schema metadata keys. SCHEMA_DATA holds raw schema bytes.
+export const META_KEY_SCHEMA_NAME = "schema_name";
+export const META_KEY_SCHEMA_ENCODING = "schema_encoding";
+export const META_KEY_SCHEMA_DATA = "schema_data";
+
 // Internal per-topic metadata keys used to carry write-format control flags
 // alongside caller-supplied metadata. The __td_ prefix namespaces them away
 // from user keys. The reader reads these back to drive decompression and

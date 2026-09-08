@@ -62,6 +62,9 @@ export type {
 } from "./types.js";
 export {
   META_KEY_COMPRESSED,
+  META_KEY_SCHEMA_NAME,
+  META_KEY_SCHEMA_ENCODING,
+  META_KEY_SCHEMA_DATA,
   META_KEY_VIDEO,
   META_KEY_CHUNK_CONFIG,
 } from "./types.js";

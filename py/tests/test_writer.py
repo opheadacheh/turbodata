@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import io
 import struct
+import warnings
 
 import pytest
 
@@ -355,3 +356,35 @@ class TestMultiGroup:
             for info in ti.index_chunk_info_list:
                 all_offsets.append(info.offset)
         assert all_offsets == sorted(all_offsets)
+
+
+@pytest.mark.parametrize("empty", [None, "", b"", bytearray()])
+def test_schema_metadata_warns_without_preventing_roundtrip(empty):
+    """Producers see incomplete schemas while raw payloads remain usable."""
+    from turbodata import META_KEY_SCHEMA_NAME, META_KEY_SCHEMA_ENCODING, META_KEY_SCHEMA_DATA
+
+    keys = [META_KEY_SCHEMA_NAME, META_KEY_SCHEMA_ENCODING, META_KEY_SCHEMA_DATA]
+    complete = dict(zip(keys, ["Example", "jsonschema", b'{"type":"object"}']))
+    metas = [complete, {}, dict.fromkeys(keys, empty), {keys[0]: "Example", keys[1]: "jsonschema"}]
+    names = ["complete", "missing", "empty", "partial"]
+    buf = io.BytesIO()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with Writer(buf) as w:
+            w.open_topics(names, metas)
+            for name in names:
+                w.write_message(name, b"payload", 1)
+            w.close_topic()
+        assert len(caught) == 3
+        for warning, name in zip(caught, names[1:]):
+            message = str(warning.message)
+            assert f"topic {name!r}" in message
+            expected = keys if name != "partial" else [keys[2]]
+            assert f"metadata {', '.join(expected)};" in message
+            assert warning.filename == __file__
+        caught.clear()
+        reader = Reader(BytesReadSource(buf.getvalue()))
+        summary = reader.summary()
+        assert summary.topics_infos[0].topic_metadatas[0].metadata == complete
+        assert [msg.data for msg in reader.read_messages()] == [b"payload"] * 4
+        assert not caught

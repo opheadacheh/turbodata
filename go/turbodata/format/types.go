@@ -14,6 +14,13 @@
 
 package format
 
+// Common per-topic schema metadata keys. SchemaData holds raw schema bytes.
+const (
+	MetaKeySchemaName     = "schema_name"
+	MetaKeySchemaEncoding = "schema_encoding"
+	MetaKeySchemaData     = "schema_data"
+)
+
 // Internal per-topic metadata keys used to carry write-format control flags
 // alongside caller-supplied metadata. The __td_ prefix namespaces them away
 // from user keys. MetaKeyCompressed and MetaKeyVideo are persisted into the

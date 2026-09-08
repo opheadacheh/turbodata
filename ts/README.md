@@ -206,3 +206,10 @@ npm run example:read       # defaults, order, topic + time filters, strategy, vi
 npm run example:sample     # floor lookup, multi-topic, strategy, video GOP-prefix
 npm run example:multiread  # union, split-via-remap, cross-file sample
 ```
+
+### Schema metadata
+
+The package exports `META_KEY_SCHEMA_NAME`, `META_KEY_SCHEMA_ENCODING`, and
+`META_KEY_SCHEMA_DATA` for accessing each topic's metadata map. The first two
+values are strings; schema data decodes as `Uint8Array`. Older files may omit
+these keys. Reading does not warn or automatically decode message payloads.

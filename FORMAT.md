@@ -153,6 +153,20 @@ len(i) = index_chunk_info[i+1].offset - index_chunk_info[i].offset           # i
 len(last) = total_len - index_chunk_info[last].offset + index_chunk_info[0].offset
 ```
 
+### Common schema metadata keys
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `schema_name` | string | Schema name. |
+| `schema_encoding` | string | Schema encoding, such as `jsonschema` or `protobuf`. |
+| `schema_data` | bytes | Raw schema content, stored as MessagePack binary. |
+
+Go and Python writers warn once per topic at open when any of these keys is
+missing, null, an empty string, or empty bytes. The warning lists the affected
+keys; writing continues by default. Values are not filled in or validated as
+schemas. Readers accept older files without these keys and do not warn.
+These fields describe schemas; they do not automatically decode messages.
+
 ### Reserved metadata keys
 
 A topic's `metadata` map carries arbitrary caller key/values, plus reserved

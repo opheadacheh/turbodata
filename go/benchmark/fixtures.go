@@ -21,6 +21,7 @@ import (
 	"os"
 
 	"github.com/opheadacheh/turbodata/go/turbodata"
+	"github.com/opheadacheh/turbodata/go/turbodata/format"
 
 	"github.com/foxglove/mcap/go/mcap"
 )
@@ -165,9 +166,9 @@ func schemaMeta(s *mcap.Schema) map[string]any {
 		return map[string]any{}
 	}
 	return map[string]any{
-		"schema_encoding": s.Encoding,
-		"schema_data":     s.Data,
-		"schema_name":     s.Name,
+		format.MetaKeySchemaEncoding: s.Encoding,
+		format.MetaKeySchemaData:     s.Data,
+		format.MetaKeySchemaName:     s.Name,
 	}
 }
 

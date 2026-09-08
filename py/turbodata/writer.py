@@ -36,6 +36,7 @@ and go/writer.go WriteVideoMessage.
 from __future__ import annotations
 
 from io import BytesIO
+import warnings
 from typing import Any, BinaryIO, Dict, List, Optional
 
 from . import _codec, _compress
@@ -160,6 +161,26 @@ class Writer:
             if compression:
                 raise VideoTopicCannotBeCompressedError(
                     "video topics cannot also be compressed"
+                )
+
+        for name, metadata in zip(names, metadatas):
+            missing = []
+            for key in (
+                _codec.META_KEY_SCHEMA_NAME,
+                _codec.META_KEY_SCHEMA_ENCODING,
+                _codec.META_KEY_SCHEMA_DATA,
+            ):
+                value = metadata.get(key)
+                if value is None or (
+                    isinstance(value, (str, bytes, bytearray)) and len(value) == 0
+                ):
+                    missing.append(key)
+            if missing:
+                warnings.warn(
+                    f"turbodata: topic {name!r}: missing or empty schema metadata "
+                    f"{', '.join(missing)}; downstream decoding may be affected",
+                    UserWarning,
+                    stacklevel=2,
                 )
 
         self._is_topic_open = True
