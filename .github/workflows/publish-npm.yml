@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   publish:
-    name: Build and publish to npm
+    name: Build and stage on npm
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,12 +21,12 @@ jobs:
         with:
           node-version: "24"
           registry-url: https://registry.npmjs.org
-      - name: Install npm with Trusted Publishing support
-        run: npm install --global npm@11
-      - name: Install, build, test, and publish
+      - name: Install npm with staged publishing support
+        run: npm install --global 'npm@^11.15.0'
+      - name: Install, build, test, and stage
         working-directory: ts
         run: |
           npm ci
           npm run build
           npm test
-          npm publish --provenance --access public
+          npm stage publish --provenance --access public

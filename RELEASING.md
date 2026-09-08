@@ -57,9 +57,10 @@ select GitHub Actions, and configure:
 
 - Organization or user: `opheadacheh`, Repository: `turbodata`
 - Workflow filename: `publish-npm.yml`, Environment name: leave empty
-- Allow direct publishing with `npm publish` if the option is shown.
+- Allow `npm stage publish`; direct publishing permission is not needed.
 
-The workflow uses Node.js 24 and npm 11 to support OIDC authentication. See
+The workflow uses Node.js 24 and npm 11.15.0 or newer within npm 11 to support
+staged publishing with OIDC authentication. See
 the [npm Trusted Publishing documentation](https://docs.npmjs.com/trusted-publishers/).
 For subsequent releases, choose a version that has not already been published:
 
@@ -72,7 +73,11 @@ git push origin ts-v0.1.1
 ```
 
 [`.github/workflows/publish-npm.yml`](./.github/workflows/publish-npm.yml) runs
-`npm ci`, `npm run build`, `npm test`, and `npm publish --provenance --access public`.
+`npm ci`, `npm run build`, `npm test`, and `npm stage publish --provenance --access public`.
+After it succeeds, review the package in npmjs.com's **Staged Packages** tab
+and approve it with 2FA, or run `npm stage approve <stage-id>` locally with
+npm 11.15.0 or newer. The version becomes public only after approval. See
+the [staged publishing guide](https://docs.npmjs.com/staged-publishing/).
 
 ## Checklist
 
@@ -80,4 +85,5 @@ git push origin ts-v0.1.1
 - [ ] `CHANGELOG.md` updated.
 - [ ] CI green on `main`.
 - [ ] Tag pushed using the pattern above.
+- [ ] (npm) staged package reviewed and approved with 2FA.
 - [ ] (Python/npm) publish workflow succeeded; package visible on the registry.
