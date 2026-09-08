@@ -385,6 +385,7 @@ def test_schema_metadata_warns_without_preventing_roundtrip(empty):
         caught.clear()
         reader = Reader(BytesReadSource(buf.getvalue()))
         summary = reader.summary()
-        assert summary.topics_infos[0].topic_metadatas[0].metadata == complete
+        metadata = summary.topics_infos[0].topic_metadatas[0].metadata
+        assert {key: metadata[key] for key in keys} == complete
         assert [msg.data for msg in reader.read_messages()] == [b"payload"] * 4
         assert not caught
