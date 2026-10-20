@@ -15,8 +15,8 @@
 """zstd compress/decompress wrapper. Mirrors go/internal/compress/compress.go.
 
 EncodeAll/DecodeAll-equivalent calls. zstandard ZstdCompressor/ZstdDecompressor
-instances are safe to share across threads, so we keep one of each at module
-level.
+instances cannot be used concurrently, so each thread lazily creates and reuses
+its own instances.
 
 The Go and TS encoders sometimes omit the original content size from the zstd
 frame header, so the simple `decompressor.decompress(data)` overload (which
@@ -26,17 +26,23 @@ requires content-size to preallocate) fails on cross-language reads. We use
 from __future__ import annotations
 
 import io
+import threading
 
 import zstandard
 
-_compressor = zstandard.ZstdCompressor()
-_decompressor = zstandard.ZstdDecompressor()
+_contexts = threading.local()
 
 
 def compress(data: bytes) -> bytes:
-    return _compressor.compress(data)
+    compressor = getattr(_contexts, "compressor", None)
+    if compressor is None:
+        compressor = _contexts.compressor = zstandard.ZstdCompressor()
+    return compressor.compress(data)
 
 
 def decompress(data: bytes) -> bytes:
-    with _decompressor.stream_reader(io.BytesIO(data)) as r:
+    decompressor = getattr(_contexts, "decompressor", None)
+    if decompressor is None:
+        decompressor = _contexts.decompressor = zstandard.ZstdDecompressor()
+    with decompressor.stream_reader(io.BytesIO(data)) as r:
         return r.read()
