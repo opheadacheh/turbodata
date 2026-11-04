@@ -243,12 +243,23 @@ mr = MultiReader(
     Reader(BytesReadSource(file_b), topic_remap={"/cam": "/cam_b"}),
 )
 
+for group in mr.summary().topics_infos:
+    for topic in group.topic_metadatas:
+        print(topic.name, topic.message_count)
+
 for msg in mr.read_messages():
     print(msg.timestamp, msg.topic_name)
 
 # sample() returns, per cell, the latest floor across the union of files.
 out = mr.sample([SampleQuery(topic="/cam", timestamps=[150, 350])])
 ```
+
+`summary()` preserves each reader's topic groups in input order, including remapped
+names, schema metadata and message counts. Topic IDs and index offsets remain local
+to their original file; the result does not describe a single physical file.
+Declared topics with no messages remain valid sample queries and return
+`found=False`. When another file supplies messages under the same exposed name,
+sampling still returns the latest floor across those files.
 
 ### Topic remap
 

@@ -25,8 +25,9 @@ names meant to stay distinct do not.
 from __future__ import annotations
 
 import heapq
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Set, Tuple
 
+from ._codec import Summary
 from ._iter import Order
 from .errors import SampleValidationError, VideoSourcesOverlapError
 from .reader import Message, Reader, SampleQuery, SampleResult, _TopicBound
@@ -44,6 +45,19 @@ class MultiReader:
         if not readers:
             raise ValueError("turbodata: MultiReader requires at least one reader")
         self._readers: List[Reader] = list(readers)
+
+    # ---- summary --------------------------------------------------------
+    def summary(self) -> Summary:
+        """Return child topic groups in reader order, preserving exposed names.
+
+        Metadata, message counts, indexes, and total_len retain their per-file
+        values. Topic IDs and byte offsets remain local to each source file;
+        this summary does not describe a single physical file. Topic-name
+        collisions across files remain the caller's responsibility.
+        """
+        return Summary(topics_infos=[
+            ti for reader in self._readers for ti in reader.summary().topics_infos
+        ])
 
     # ---- read_messages --------------------------------------------------
     def read_messages(
@@ -140,11 +154,15 @@ class MultiReader:
         reader must have time-disjoint source ranges; overlapping sources raise
         VideoSourcesOverlapError.
         """
-        bounds = [r._topic_bounds() for r in self._readers]
-
-        _validate_multi_sample_queries(queries, bounds)
+        # A declared topic can have no chunks, and therefore no time bounds.
+        reader_topics = [
+            {tm.name for ti in r.summary().topics_infos for tm in ti.topic_metadatas}
+            for r in self._readers
+        ]
+        _validate_multi_sample_queries(queries, reader_topics)
 
         if video_decodable:
+            bounds = [r._topic_bounds() for r in self._readers]
             _enforce_video_disjoint([q.topic for q in queries], bounds)
 
         out: List[List[SampleResult]] = [
@@ -158,7 +176,7 @@ class MultiReader:
             subset: List[SampleQuery] = []
             orig_idx: List[int] = []
             for qi, q in enumerate(queries):
-                if q.topic in bounds[ri]:
+                if q.topic in reader_topics[ri]:
                     subset.append(q)
                     orig_idx.append(qi)
             if not subset:
@@ -172,9 +190,11 @@ class MultiReader:
             for sub, qi in enumerate(orig_idx):
                 row = res[sub]
                 for j, cand in enumerate(row):
-                    if not cand.found:
-                        continue
                     cur = out[qi][j]
+                    if not cand.found:
+                        if not cur.found:
+                            cur.is_video = cur.is_video or cand.is_video
+                        continue
                     if not cur.found or cand.timestamp > cur.timestamp:
                         out[qi][j] = cand
         return out
@@ -198,14 +218,14 @@ def _read_scope_topics(
 
 
 def _validate_multi_sample_queries(
-    queries: List[SampleQuery], bounds: List[Dict[str, _TopicBound]]
+    queries: List[SampleQuery], reader_topics: List[Set[str]]
 ) -> None:
     """Mirror the single-reader checks but treat a topic as known if any reader
     holds it. All violations are aggregated. Mirrors go validateMultiSampleQueries."""
     seen: Dict[str, int] = {}
     violations: List[str] = []
     for i, q in enumerate(queries):
-        known = any(q.topic in b for b in bounds)
+        known = any(q.topic in names for names in reader_topics)
         if not known:
             violations.append(f"queries[{i}]: unknown topic {q.topic!r} (not in any reader)")
         if q.topic in seen:

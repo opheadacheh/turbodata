@@ -32,11 +32,13 @@ from turbodata import (
     Reader,
     SampleQuery,
     SampleResult,
+    SampleValidationError,
+    Summary,
     VideoSourcesOverlapError,
     Writer,
 )
 
-from .conftest import build_file
+from .conftest import TrackingSource, build_file
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +123,50 @@ def test_new_multi_reader_requires_a_reader():
 
 
 # ---------------------------------------------------------------------------
+# summary
+# ---------------------------------------------------------------------------
+def test_multi_summary_preserves_groups_remap_and_file_local_fields():
+    def setup(w: Writer) -> None:
+        w.open_topics(
+            ["cam", "empty"],
+            [{"schema_data": b"schema", "sensor": {"hz": 10}}, {"unit": "rad"}],
+            compression=True,
+        )
+        w.write_message("cam", b"first", 10)
+        w.write_message("cam", b"second", 20)
+        w.close_topic()
+        w.open_topics(["unused"], [{"note": "declared only"}])
+        w.close_topic()
+        w.open_topics(["video"], [{"codec": "h264"}], video=True)
+        w.write_video_message("video", b"keyframe", 30, True)
+        w.close_topic()
+
+    first = _reader(build_file(setup), topic_remap={"cam": "camera"})
+    second = _reader(_build_one_topic("cam", 100), topic_remap={"cam": "camera"})
+    children = [first.summary(), second.summary()]
+
+    summary = MultiReader(first, second).summary()
+
+    assert isinstance(summary, Summary)
+    assert summary.topics_infos == children[0].topics_infos + children[1].topics_infos
+    assert [[tm.name for tm in ti.topic_metadatas] for ti in summary.topics_infos] == [
+        ["camera", "empty"], ["unused"], ["video"], ["camera"],
+    ]
+    group = summary.topics_infos[0]
+    assert [tm.message_count for tm in group.topic_metadatas] == [2, 0]
+    assert group.topic_metadatas[0].metadata["schema_data"] == b"schema"
+    assert group.topic_metadatas[0].metadata["sensor"] == {"hz": 10}
+    assert group.total_len > 0
+    assert [(i.start_timestamp, i.end_timestamp) for i in group.index_chunk_info_list] == [(10, 20)]
+    assert summary.topics_infos[1].index_chunk_info_list == []
+    assert summary.topics_infos[1].total_len == 0
+    # IDs and offsets retain their file-local meaning, including repeated IDs.
+    assert group.topic_metadatas[0].id == summary.topics_infos[-1].topic_metadatas[0].id
+    assert group.index_chunk_info_list == children[0].topics_infos[0].index_chunk_info_list
+    assert summary.topics_infos[-1].index_chunk_info_list == children[1].topics_infos[0].index_chunk_info_list
+
+
+# ---------------------------------------------------------------------------
 # read_messages: merging
 # ---------------------------------------------------------------------------
 def test_multi_read_time_split():
@@ -199,8 +245,83 @@ def test_multi_sample_latest_floor():
 def test_multi_sample_unknown_topic_rejected():
     a = _build_one_topic("cam", 10, 20)
     mr = MultiReader(_reader(a))
-    with pytest.raises(Exception):
+    with pytest.raises(SampleValidationError, match="unknown topic 'nope'"):
         mr.sample([SampleQuery(topic="nope", timestamps=[5])])
+
+
+def test_multi_sample_declared_empty_topic_matches_single_reader():
+    reader = _reader(_build_one_topic("empty"), topic_remap={"empty": "renamed"})
+    queries = [SampleQuery(topic="renamed", timestamps=[0, 10, 20])]
+    assert MultiReader(reader).sample(queries) == reader.sample(queries)
+    assert MultiReader(reader).sample([SampleQuery(topic="renamed", timestamps=[])]) == [[]]
+
+
+@pytest.mark.parametrize("empty_first", [True, False])
+def test_multi_sample_empty_and_live_union_preserves_query_order(empty_first):
+    def setup(w: Writer) -> None:
+        w.open_topics(["cam", "empty"], [{}, {}])
+        w.write_message("cam", b"live", 10)
+        w.close_topic()
+
+    readers = [
+        _reader(_build_one_topic("cam")),
+        _reader(build_file(setup)),
+    ]
+    if not empty_first:
+        readers.reverse()
+    out = MultiReader(*readers).sample([
+        SampleQuery(topic="empty", timestamps=[5, 15]),
+        SampleQuery(topic="cam", timestamps=[5, 10, 20]),
+    ])
+    assert out == [
+        [SampleResult(False, 0, b""), SampleResult(False, 0, b"")],
+        [SampleResult(False, 0, b""), SampleResult(True, 10, b"live"), SampleResult(True, 10, b"live")],
+    ]
+
+
+def test_multi_sample_validates_all_queries_before_data_reads():
+    sources = [
+        TrackingSource(BytesReadSource(_build_one_topic("live", 10))),
+        TrackingSource(BytesReadSource(_build_one_topic("empty"))),
+    ]
+    readers = [Reader(source) for source in sources]
+    for reader in readers:
+        reader.summary()
+    before = [source.read_at_calls for source in sources]
+
+    with pytest.raises(SampleValidationError) as exc_info:
+        MultiReader(*readers).sample([
+            SampleQuery(topic="live", timestamps=[20]),
+            SampleQuery(topic="empty", timestamps=[20, 10]),
+            SampleQuery(topic="empty", timestamps=[10]),
+            SampleQuery(topic="ghost", timestamps=[10]),
+        ])
+
+    violations = exc_info.value.violations
+    assert len(violations) == 3
+    assert "queries[1].timestamps not strictly increasing" in violations[0]
+    assert "queries[2]: duplicate topic 'empty'" in violations[1]
+    assert "queries[3]: unknown topic 'ghost'" in violations[2]
+    assert [source.read_at_calls for source in sources] == before
+
+
+@pytest.mark.parametrize("video_decodable", [False, True])
+def test_multi_sample_empty_video_matches_single_reader(video_decodable):
+    reader = _reader(_build_video_file("cam", []), topic_remap={"cam": "video"})
+    queries = [SampleQuery(topic="video", timestamps=[0, 10])]
+    assert MultiReader(reader).sample(queries, video_decodable=video_decodable) == reader.sample(
+        queries, video_decodable=video_decodable,
+    )
+
+
+def test_multi_empty_video_does_not_overlap_live_video_at_zero():
+    empty = _reader(_build_video_file("cam", []))
+    live = _reader(_build_video_file("cam", [_F(0, True, b"K0"), _F(10, False, b"P10")]))
+    queries = [SampleQuery(topic="cam", timestamps=[-1, 0, 10])]
+    mr = MultiReader(empty, live)
+
+    assert mr.sample(queries, video_decodable=True) == live.sample(queries, video_decodable=True)
+    assert _collect(mr, video_decodable=True) == [(0, "cam", b"K0"), (10, "cam", b"P10")]
 
 
 # ---------------------------------------------------------------------------
