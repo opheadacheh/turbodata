@@ -15,6 +15,7 @@
 package iter
 
 type message struct {
+	isKeyFrame bool
 	topicId    uint16
 	data       []byte
 	groupIndex int

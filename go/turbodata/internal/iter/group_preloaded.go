@@ -84,9 +84,14 @@ func newPreloadedTopicsGroupIterator(
 // group is exhausted. Returned data aliases loadedData / decompressBuf; the
 // caller must copy if it needs to outlive the next call.
 func (it *preloadedTopicsGroupIterator) Next() (int64, uint16, []byte, error) {
+	ts, tid, data, _, err := it.nextWithKeyFrameMark()
+	return ts, tid, data, err
+}
+
+func (it *preloadedTopicsGroupIterator) nextWithKeyFrameMark() (int64, uint16, []byte, bool, error) {
 	for {
 		if it.chunkIdx < 0 || it.chunkIdx >= len(it.indexChunks) {
-			return 0, 0, nil, io.EOF
+			return 0, 0, nil, false, io.EOF
 		}
 		msgs := it.chunkMessages[it.chunkIdx]
 		if it.msgIdx < 0 || it.msgIdx >= len(msgs) {
@@ -98,7 +103,7 @@ func (it *preloadedTopicsGroupIterator) Next() (int64, uint16, []byte, error) {
 		if it.isCompressed && it.loadedChunkIdx != it.chunkIdx {
 			compressed := it.loadedData.Get(it.indexChunks[it.chunkIdx].ChunkOffset)
 			if err := compress.DecompressInto(compressed, it.decompressBuf); err != nil {
-				return 0, 0, nil, err
+				return 0, 0, nil, false, err
 			}
 			it.loadedChunkIdx = it.chunkIdx
 		}
@@ -116,7 +121,7 @@ func (it *preloadedTopicsGroupIterator) Next() (int64, uint16, []byte, error) {
 		}
 
 		it.advanceMessage()
-		return msg.messageIndex.Timestamp, msg.topicId, data, nil
+		return msg.messageIndex.Timestamp, msg.topicId, data, msg.isKeyFrame, nil
 	}
 }
 

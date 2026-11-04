@@ -57,11 +57,15 @@ class Message:
     `data` aliases an internal buffer and is valid only until the next
     iteration step. Use `copy=True` on read_messages, or call `bytes(msg.data)`
     yourself, to retain bytes past the next pull.
+
+    `is_key_frame` is the writer-recorded mark, independent of video_decodable;
+    it is False for non-video messages.
     """
 
-    __slots__ = ("timestamp", "topic_name", "data")
+    __slots__ = ("timestamp", "topic_name", "data", "is_key_frame")
 
-    def __init__(self, timestamp: int, topic_name: str, data: bytes) -> None:
+    def __init__(self, timestamp: int, topic_name: str, data: bytes, is_key_frame: bool = False) -> None:
+        self.is_key_frame = is_key_frame
         self.timestamp = timestamp
         self.topic_name = topic_name
         self.data = data
@@ -368,32 +372,32 @@ class Reader:
     ) -> Iterator[Message]:
         import heapq
 
-        # Heap entries: (key, counter, group_idx, topic_id, data). counter
+        # Heap entries: (key, counter, group_idx, topic_id, data, mark). counter
         # disambiguates equal keys so we never compare data/topic_id.
         reverse = order == Order.REVERSE_TIME
-        heap: List[Tuple[int, int, int, int, bytes]] = []
+        heap: List[Tuple[int, int, int, int, bytes, bool]] = []
         counter = 0
 
         for i, git in enumerate(group_its):
             entry = git.next()
             if entry is None:
                 continue
-            ts, tid, data = entry
+            ts, tid, data, mark = entry
             key = -ts if reverse else ts
-            heap.append((key, counter, i, tid, data))
+            heap.append((key, counter, i, tid, data, mark))
             counter += 1
         heapq.heapify(heap)
 
         while heap:
-            key, _, gi, tid, data = heapq.heappop(heap)
+            key, _, gi, tid, data, mark = heapq.heappop(heap)
             ts = -key if reverse else key
             payload = bytes(data) if copy else data
-            yield Message(timestamp=ts, topic_name=id_to_name.get(tid, ""), data=payload)
+            yield Message(timestamp=ts, topic_name=id_to_name.get(tid, ""), data=payload, is_key_frame=mark)
             nxt = group_its[gi].next()
             if nxt is not None:
-                nts, ntid, ndata = nxt
+                nts, ntid, ndata, nmark = nxt
                 nkey = -nts if reverse else nts
-                heapq.heappush(heap, (nkey, counter, gi, ntid, ndata))
+                heapq.heappush(heap, (nkey, counter, gi, ntid, ndata, nmark))
                 counter += 1
 
     # ---- default-path setup -------------------------------------------

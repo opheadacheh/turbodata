@@ -27,11 +27,13 @@ export interface MessageRef {
   timestamp: bigint;
   topicId: number;
   offsetInChunk: bigint;
+  isKeyFrame: boolean;
 }
 
 interface ItemWithTopic {
   topicId: number;
   mi: MessageIndex;
+  isKeyFrame: boolean;
 }
 
 export function sortAndFilter(
@@ -56,13 +58,15 @@ export function sortAndFilter(
   if (topicIndexes.length === 1) {
     // Fast path: single topic, messages are already in offset order.
     const ti = topicIndexes[0]!;
-    for (const mi of ti.messageIndexes) {
-      sorted[writeIdx++] = { topicId: ti.id, mi };
+    const keys = new Set(ti.keyFrameIndexes);
+    for (const [i, mi] of ti.messageIndexes.entries()) {
+      sorted[writeIdx++] = { topicId: ti.id, mi, isKeyFrame: keys.has(i) };
     }
   } else {
     // K-way merge by offsetInChunk across topics, via a min-heap.
     // Mirrors go/sort_and_filter.go's MessageIndexHeap-based merge: O(N log K)
     // regardless of how many topics share a group.
+    const keys = topicIndexes.map((ti) => new Set(ti.keyFrameIndexes));
     const heap = new MessageHeap<{ topicSlot: number; cursor: number }>(false);
     for (let t = 0; t < topicIndexes.length; t++) {
       const mis = topicIndexes[t]!.messageIndexes;
@@ -75,7 +79,11 @@ export function sortAndFilter(
       const top = heap.pop()!;
       const { topicSlot, cursor } = top.value;
       const ti = topicIndexes[topicSlot]!;
-      sorted[writeIdx++] = { topicId: ti.id, mi: ti.messageIndexes[cursor]! };
+      sorted[writeIdx++] = {
+        topicId: ti.id,
+        mi: ti.messageIndexes[cursor]!,
+        isKeyFrame: keys[topicSlot]!.has(cursor),
+      };
       const next = cursor + 1;
       if (next < ti.messageIndexes.length) {
         heap.push(ti.messageIndexes[next]!.offsetInChunk, {
@@ -114,6 +122,7 @@ export function sortAndFilter(
       continue;
     }
     msgs.push({
+      isKeyFrame: item.isKeyFrame,
       timestamp: ts,
       topicId: item.topicId,
       offsetInChunk: item.mi.offsetInChunk,

@@ -24,12 +24,13 @@ import (
 
 // multiEntry is one in-flight head from a sub-iterator. The message bytes are
 // not carried here; they live in the owning sub's buffer until that sub is
-// advanced again. Only the ordering key, the exposed name, and the sub index
+// advanced again. Only the ordering key, exposed name, key frame mark, and sub index
 // travel through the heap.
 type multiEntry struct {
-	timestamp int64
-	name      string
-	subIndex  int
+	isKeyFrame bool
+	timestamp  int64
+	name       string
+	subIndex   int
 }
 
 // multiHeap orders entries by timestamp. When reverse is true the ordering is
@@ -59,7 +60,7 @@ func (h *multiHeap) Pop() any {
 // MultiMessageIterator merges already-time-ordered sub-iterators into one
 // globally time-ordered stream via a k-way heap merge. Each sub owns one
 // buffer holding its current head message; the heap carries only
-// (timestamp, name, subIndex), so there is exactly one in-flight message per
+// (timestamp, name, isKeyFrame, subIndex), so there is exactly one in-flight message per
 // sub and no per-message copy beyond what each sub's NextInto already does.
 type MultiMessageIterator struct {
 	subs    []*MessageIterator
@@ -88,14 +89,14 @@ func NewMultiMessageIterator(subs []*MessageIterator, reverse bool) *MultiMessag
 // pull advances sub i into its own buffer and, unless the sub is exhausted,
 // pushes the resulting head entry onto the heap.
 func (m *MultiMessageIterator) pull(i int) error {
-	ts, name, err := m.subs[i].NextInto(m.bufs[i])
+	ts, name, mark, err := m.subs[i].NextIntoWithKeyFrameMark(m.bufs[i])
 	if errors.Is(err, io.EOF) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	heap.Push(m.h, multiEntry{timestamp: ts, name: name, subIndex: i})
+	heap.Push(m.h, multiEntry{isKeyFrame: mark, timestamp: ts, name: name, subIndex: i})
 	return nil
 }
 
@@ -113,15 +114,22 @@ func (m *MultiMessageIterator) initLoad() error {
 // its timestamp and exposed topic name. Returns io.EOF when every sub is
 // drained.
 func (m *MultiMessageIterator) NextInto(buf *buffer.ReusableBuffer) (int64, string, error) {
+	ts, name, _, err := m.NextIntoWithKeyFrameMark(buf)
+	return ts, name, err
+}
+
+// NextIntoWithKeyFrameMark also returns the writer-recorded key frame mark.
+// Non-video messages return false; the mark is independent of VideoDecodable.
+func (m *MultiMessageIterator) NextIntoWithKeyFrameMark(buf *buffer.ReusableBuffer) (int64, string, bool, error) {
 	if !m.loaded {
 		if err := m.initLoad(); err != nil {
-			return 0, "", err
+			return 0, "", false, err
 		}
 		m.loaded = true
 	}
 
 	if m.h.Len() == 0 {
-		return 0, "", io.EOF
+		return 0, "", false, io.EOF
 	}
 
 	// The popped entry's bytes still live in its sub's buffer; copy them out
@@ -132,7 +140,7 @@ func (m *MultiMessageIterator) NextInto(buf *buffer.ReusableBuffer) (int64, stri
 	copy(buf.Data, src)
 
 	if err := m.pull(top.subIndex); err != nil {
-		return 0, "", err
+		return 0, "", false, err
 	}
-	return top.timestamp, top.name, nil
+	return top.timestamp, top.name, top.isKeyFrame, nil
 }

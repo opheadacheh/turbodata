@@ -346,15 +346,22 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 }
 
 func (it *MessageIterator) NextInto(buf *buffer.ReusableBuffer) (int64, string, error) {
+	ts, name, _, err := it.NextIntoWithKeyFrameMark(buf)
+	return ts, name, err
+}
+
+// NextIntoWithKeyFrameMark also returns the writer-recorded key frame mark.
+// Non-video messages return false; the mark is independent of VideoDecodable.
+func (it *MessageIterator) NextIntoWithKeyFrameMark(buf *buffer.ReusableBuffer) (int64, string, bool, error) {
 	if !it.loaded {
 		if err := it.initLoad(); err != nil {
-			return 0, "", err
+			return 0, "", false, err
 		}
 	}
 	it.loaded = true
 
 	if it.heap.Len() == 0 {
-		return 0, "", io.EOF
+		return 0, "", false, io.EOF
 	}
 
 	item, _ := heap.Pop(it.heap).(*message)
@@ -363,26 +370,28 @@ func (it *MessageIterator) NextInto(buf *buffer.ReusableBuffer) (int64, string, 
 
 	retTimestamp := item.timestamp
 	retTopicId := item.topicId
+	retMark := item.isKeyFrame
 
-	timestamp, topicId, data, err := it.groupNext(item.groupIndex)
+	timestamp, topicId, data, mark, err := it.groupNext(item.groupIndex)
 	if err == nil {
+		item.isKeyFrame = mark
 		item.timestamp = timestamp
 		item.topicId = topicId
 		item.data = data
 		heap.Push(it.heap, item)
 	}
 	if !errors.Is(err, io.EOF) && err != nil {
-		return 0, "", err
+		return 0, "", false, err
 	}
 
-	return retTimestamp, it.topicIdToNames[retTopicId], nil
+	return retTimestamp, it.topicIdToNames[retTopicId], retMark, nil
 }
 
-func (it *MessageIterator) groupNext(groupIndex int) (int64, uint16, []byte, error) {
+func (it *MessageIterator) groupNext(groupIndex int) (int64, uint16, []byte, bool, error) {
 	if it.Strategy != nil {
-		return it.preloadedTopicsGroups[groupIndex].Next()
+		return it.preloadedTopicsGroups[groupIndex].nextWithKeyFrameMark()
 	}
-	return it.topicsGroupIterators[groupIndex].Next()
+	return it.topicsGroupIterators[groupIndex].nextWithKeyFrameMark()
 }
 
 func (it *MessageIterator) initLoad() error {
@@ -391,14 +400,14 @@ func (it *MessageIterator) initLoad() error {
 		groupCount = len(it.preloadedTopicsGroups)
 	}
 	for i := 0; i < groupCount; i++ {
-		timestamp, topicId, data, err := it.groupNext(i)
+		timestamp, topicId, data, mark, err := it.groupNext(i)
 		if errors.Is(err, io.EOF) {
 			continue
 		}
 		if err != nil {
 			return err
 		}
-		heap.Push(it.heap, &message{timestamp: timestamp, topicId: topicId, data: data, groupIndex: i})
+		heap.Push(it.heap, &message{isKeyFrame: mark, timestamp: timestamp, topicId: topicId, data: data, groupIndex: i})
 	}
 	return nil
 }

@@ -168,6 +168,13 @@ func sortAndFilter(
 		effectiveStart = keyFrameStart(topicIndexes, startTimestamp)
 	}
 
+	keys := make(map[*format.MessageIndex]struct{})
+	for _, ti := range topicIndexes {
+		for _, i := range ti.KeyFrameIndexes {
+			keys[&ti.MessageIndexes[i]] = struct{}{}
+		}
+	}
+
 	// Filter by topic + timestamp range. Dropped items go back to the pool;
 	// kept items are appended to *outMsgs / *outLens.
 	for i, item := range scratch.sortedItems {
@@ -182,6 +189,7 @@ func sortAndFilter(
 			scratch.itemPool.Put(item)
 			continue
 		}
+		_, item.isKeyFrame = keys[item.messageIndex]
 		*outMsgs = append(*outMsgs, item)
 		*outLens = append(*outLens, scratch.sortedLens[i])
 	}

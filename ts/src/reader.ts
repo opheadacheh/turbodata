@@ -41,6 +41,8 @@ import {
 } from "./types.js";
 
 export interface Message {
+  /** Writer-recorded key frame mark; false for non-video messages, independent of videoDecodable. */
+  isKeyFrame: boolean;
   /** int64 nanosecond (or arbitrary unit) timestamp from the writer. */
   timestamp: bigint;
   topicName: string;
@@ -218,7 +220,7 @@ export function linSpaceTimestamps(
  */
 interface GroupIt {
   next(): Promise<
-    { timestamp: bigint; topicId: number; data: Uint8Array } | undefined
+    { isKeyFrame: boolean; timestamp: bigint; topicId: number; data: Uint8Array } | undefined
   >;
 }
 
@@ -402,6 +404,7 @@ export class Reader {
 
     let groupIts: GroupIt[] = [];
     const heap = new MessageHeap<{
+      isKeyFrame: boolean;
       groupIdx: number;
       topicId: number;
       data: Uint8Array;
@@ -472,6 +475,7 @@ export class Reader {
           continue;
         }
         heap.push(m.timestamp, {
+          isKeyFrame: m.isKeyFrame,
           groupIdx: i,
           topicId: m.topicId,
           data: m.data,
@@ -497,6 +501,7 @@ export class Reader {
           return { value: undefined, done: true };
         }
         const out: Message = {
+          isKeyFrame: top.value.isKeyFrame,
           timestamp: top.priority,
           topicName: idToName.get(top.value.topicId) ?? "",
           data: copy ? new Uint8Array(top.value.data) : top.value.data,
@@ -505,6 +510,7 @@ export class Reader {
         const nm = await groupIts[top.value.groupIdx]!.next();
         if (nm !== undefined) {
           heap.push(nm.timestamp, {
+            isKeyFrame: nm.isKeyFrame,
             groupIdx: top.value.groupIdx,
             topicId: nm.topicId,
             data: nm.data,

@@ -73,7 +73,7 @@ export class PreloadedTopicsGroupIterator {
    * `data` aliases either loadedData or the per-chunk decompressed buffer.
    */
   next():
-    | { timestamp: bigint; topicId: number; data: Uint8Array }
+    | { isKeyFrame: boolean; timestamp: bigint; topicId: number; data: Uint8Array }
     | undefined {
     while (true) {
       if (this.chunkIdx < 0 || this.chunkIdx >= this.indexChunks.length) {
@@ -119,7 +119,12 @@ export class PreloadedTopicsGroupIterator {
       }
 
       this.advanceMessage();
-      return { timestamp: msg.timestamp, topicId: msg.topicId, data };
+      return {
+        isKeyFrame: msg.isKeyFrame,
+        timestamp: msg.timestamp,
+        topicId: msg.topicId,
+        data,
+      };
     }
   }
 

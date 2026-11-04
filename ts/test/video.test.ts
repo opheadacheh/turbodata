@@ -258,3 +258,29 @@ describe("Reader.readMessages video-decodable snap-back", () => {
     });
   }
 });
+
+// A filtered first result may be a delta frame; marks must follow the stored frame.
+describe("readMessages key frame marks", () => {
+  for (const { name, strategy } of SNAP_STRATEGIES) {
+    for (const order of ["time", "reverse-time"] as const) {
+      for (const videoDecodable of [false, true]) {
+        it(`${name}, ${order}, decodable=${videoDecodable}`, async () => {
+          const { MultiReader } = await import("../src/index.js");
+          const reader = new MultiReader([
+            newReader("video-multi-gop-one-chunk.td"),
+            newReader("single-topic-uncompressed.td"),
+          ]);
+          const video: [string, boolean][] = [];
+          for await (const m of reader.readMessages({ strategy, order, videoDecodable, startTimestamp: 35n })) {
+            if (m.topicName === "/cam") video.push([TXT.decode(m.data), m.isKeyFrame]);
+            else expect(m.isKeyFrame).toBe(false);
+          }
+          const expected: [string, boolean][] = [["B1", false], ["KC", true], ["C1", false]];
+          if (videoDecodable) expected.unshift(["KB", true]);
+          if (order === "reverse-time") expected.reverse();
+          expect(video).toEqual(expected);
+        });
+      }
+    }
+  }
+});

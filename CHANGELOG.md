@@ -12,6 +12,17 @@ note the affected SDK(s) where relevant.
 
 _Nothing yet._
 
+## [0.2.0] - 2026-11-04
+
+### Added
+
+- TypeScript: `Message.isKeyFrame` exposes the stored key frame mark.
+- Python: `Message.is_key_frame` exposes the stored key frame mark.
+- Go: `NextIntoWithKeyFrameMark` returns the key frame mark while preserving
+  the existing `NextInto` API.
+- All three SDKs preserve marks through MultiReader, both read strategies,
+  time filtering, and reverse reads, independently of video-decodable mode.
+
 ## [0.1.0] - 2026-06-02
 
 ### Added

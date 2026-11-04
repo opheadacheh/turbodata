@@ -117,14 +117,19 @@ func newTopicsGroupIterator(it *MessageIterator, topicIds map[uint16]struct{}, t
 }
 
 func (it *TopicsGroupIterator) Next() (int64, uint16, []byte, error) {
+	ts, tid, data, _, err := it.nextWithKeyFrameMark()
+	return ts, tid, data, err
+}
+
+func (it *TopicsGroupIterator) nextWithKeyFrameMark() (int64, uint16, []byte, bool, error) {
 	for it.currentMessageIndex >= len(it.filteredMessageIndexes) || it.currentMessageIndex < 0 {
 		if it.currentIndexChunkInfoIndex >= len(it.indexChunkInfoList) || it.currentIndexChunkInfoIndex < 0 {
-			return 0, 0, nil, io.EOF
+			return 0, 0, nil, false, io.EOF
 		}
 
 		indexChunk, err := it.loadIndexChunk(it.indexChunkInfoList[it.currentIndexChunkInfoIndex], it.indexChunkInfoLens[it.currentIndexChunkInfoIndex])
 		if err != nil {
-			return 0, 0, nil, err
+			return 0, 0, nil, false, err
 		}
 		it.currentIndexChunkInfoIndex += it.incrementFactor
 
@@ -147,7 +152,7 @@ func (it *TopicsGroupIterator) Next() (int64, uint16, []byte, error) {
 
 		if len(it.filteredMessageIndexes) > 0 {
 			if err := it.loadDataChunk(indexChunk.ChunkOffset, indexChunk.ChunkLen); err != nil {
-				return 0, 0, nil, err
+				return 0, 0, nil, false, err
 			}
 		}
 	}
@@ -156,7 +161,7 @@ func (it *TopicsGroupIterator) Next() (int64, uint16, []byte, error) {
 	rangeEnd := messageIndex.messageIndex.OffsetInChunk + it.filteredMessageLens[it.currentMessageIndex]
 	it.currentMessageIndex += it.incrementFactor
 
-	return messageIndex.messageIndex.Timestamp, messageIndex.topicId, it.messageBuf.Data[messageIndex.messageIndex.OffsetInChunk:rangeEnd], nil
+	return messageIndex.messageIndex.Timestamp, messageIndex.topicId, it.messageBuf.Data[messageIndex.messageIndex.OffsetInChunk:rangeEnd], messageIndex.isKeyFrame, nil
 }
 
 func (it *TopicsGroupIterator) loadIndexChunk(info *format.IndexChunkInfo, length int64) (*format.IndexChunk, error) {

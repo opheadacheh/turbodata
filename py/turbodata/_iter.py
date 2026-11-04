@@ -40,9 +40,10 @@ class Order(IntEnum):
 
 
 class _MsgIdxWithTopicId:
-    __slots__ = ("topic_id", "message_index")
+    __slots__ = ("topic_id", "message_index", "is_key_frame")
 
-    def __init__(self, topic_id: int, message_index: _codec.MessageIndex) -> None:
+    def __init__(self, topic_id: int, message_index: _codec.MessageIndex, is_key_frame: bool = False) -> None:
+        self.is_key_frame = is_key_frame
         self.topic_id = topic_id
         self.message_index = message_index
 
@@ -75,15 +76,17 @@ def sort_and_filter(
     sorted_items: List[_MsgIdxWithTopicId]
     if len(topic_indexes) == 1:
         ti = topic_indexes[0]
-        sorted_items = [_MsgIdxWithTopicId(ti.id, mi) for mi in ti.message_indexes]
+        keys = set(ti.key_frame_indexes)
+        sorted_items = [_MsgIdxWithTopicId(ti.id, mi, i in keys) for i, mi in enumerate(ti.message_indexes)]
     else:
         # Flatten then sort by offset. Python's Timsort is good enough; the
         # Go version uses a k-way heap merge for streaming behaviour, but the
         # output is identical and we don't need the streaming property.
         sorted_items = []
         for ti in topic_indexes:
-            for mi in ti.message_indexes:
-                sorted_items.append(_MsgIdxWithTopicId(ti.id, mi))
+            keys = set(ti.key_frame_indexes)
+            for i, mi in enumerate(ti.message_indexes):
+                sorted_items.append(_MsgIdxWithTopicId(ti.id, mi, i in keys))
         sorted_items.sort(key=lambda it: it.message_index.offset_in_chunk)
 
     sorted_lens: List[int] = [0] * len(sorted_items)
@@ -206,8 +209,8 @@ class TopicsGroupIterator:
     def has_any(self) -> bool:
         return len(self._infos) > 0
 
-    def next(self) -> Optional[Tuple[int, int, bytes]]:
-        """Returns (timestamp, topic_id, data) or None on EOF."""
+    def next(self) -> Optional[Tuple[int, int, bytes, bool]]:
+        """Returns (timestamp, topic_id, data, is_key_frame) or None on EOF."""
         while (
             self._current_msg >= len(self._filtered_msgs)
             or self._current_msg < 0
@@ -243,7 +246,7 @@ class TopicsGroupIterator:
         end = item.message_index.offset_in_chunk + self._filtered_lens[self._current_msg]
         data = self._data_buf[item.message_index.offset_in_chunk : end]
         self._current_msg += self._increment
-        return (item.message_index.timestamp, item.topic_id, data)
+        return (item.message_index.timestamp, item.topic_id, data, item.is_key_frame)
 
     def _load_index_chunk(
         self, info: _codec.IndexChunkInfo, length: int
@@ -293,7 +296,7 @@ class PreloadedTopicsGroupIterator:
             self._chunk_idx = 0
             self._msg_idx = 0
 
-    def next(self) -> Optional[Tuple[int, int, bytes]]:
+    def next(self) -> Optional[Tuple[int, int, bytes, bool]]:
         while True:
             if self._chunk_idx < 0 or self._chunk_idx >= len(self._index_chunks):
                 return None
@@ -329,7 +332,7 @@ class PreloadedTopicsGroupIterator:
                     )
 
             self._advance_message()
-            return (msg.message_index.timestamp, msg.topic_id, data)
+            return (msg.message_index.timestamp, msg.topic_id, data, msg.is_key_frame)
 
     def _advance_message(self) -> None:
         if self._order == Order.REVERSE_TIME:

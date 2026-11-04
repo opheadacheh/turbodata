@@ -112,6 +112,7 @@ export class TopicsGroupIterator {
    * copy if persistence is needed.
    */
   async next(): Promise<{
+    isKeyFrame: boolean;
     timestamp: bigint;
     topicId: number;
     data: Uint8Array;
@@ -142,7 +143,12 @@ export class TopicsGroupIterator {
     const start = Number(ref.offsetInChunk);
     const end = start + Number(len);
     const data = this.dataBuffer!.subarray(start, end);
-    return { timestamp: ref.timestamp, topicId: ref.topicId, data };
+    return {
+      isKeyFrame: ref.isKeyFrame,
+      timestamp: ref.timestamp,
+      topicId: ref.topicId,
+      data,
+    };
   }
 
   private async loadCurrentChunk(): Promise<void> {

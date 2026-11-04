@@ -518,3 +518,26 @@ class TestReadMessagesVideoDecodableCostAware:
             ),
         )
         assert _payloads(msgs) == [b"K10", b"P20", b"P30", b"P40"]
+
+
+@pytest.mark.parametrize("cost_aware", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("decodable", [False, True])
+def test_read_key_frame_marks(cost_aware, reverse, decodable):
+    # Use the same Go-produced fixture as TS to verify cross-language semantics.
+    from pathlib import Path
+    from turbodata import MultiReader, Order, ReadStrategy
+    root = Path(__file__).resolve().parents[2] / "ts/test/fixtures"
+    readers = [Reader(BytesReadSource((root / name).read_bytes())) for name in
+               ("video-multi-gop-one-chunk.td", "single-topic-uncompressed.td")]
+    strategy = ReadStrategy(coalesce_gap=1 << 20, split_threshold=4 << 20, max_concurrency=2) if cost_aware else None
+    messages = list(MultiReader(*readers).read_messages(
+        start_timestamp=35, video_decodable=decodable, strategy=strategy,
+        order=Order.REVERSE_TIME if reverse else Order.TIME, copy=True))
+    expected = [(b"B1", False), (b"KC", True), (b"C1", False)]
+    if decodable:
+        expected.insert(0, (b"KB", True))
+    if reverse:
+        expected.reverse()
+    assert [(m.data, m.is_key_frame) for m in messages if m.topic_name == "/cam"] == expected
+    assert all(m.is_key_frame is False for m in messages if m.topic_name != "/cam")

@@ -17,6 +17,7 @@ package iter
 import "github.com/opheadacheh/turbodata/go/turbodata/format"
 
 type messageIndexWithTopicId struct {
+	isKeyFrame   bool
 	topicId      uint16
 	messageIndex *format.MessageIndex
 }
