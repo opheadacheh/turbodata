@@ -22,13 +22,17 @@ from __future__ import annotations
 
 import io
 import struct
+from pathlib import Path
 
 import pytest
 
 from turbodata import (
     BytesReadSource,
     FileTooSmallError,
+    IndexEntry,
     InvalidMagicError,
+    Order,
+    ReadStrategy,
     Reader,
 )
 from turbodata._codec import (
@@ -43,7 +47,7 @@ from turbodata._codec import (
 )
 from turbodata._compress import compress
 
-from .conftest import TrackingSource
+from .conftest import TS_FIXTURES, TrackingSource, build_file
 
 
 def _make_reader_fixture(
@@ -185,13 +189,14 @@ class TestSummaryWithHint:
         reader.summary()
         assert tracking.read_at_calls == 2
 
-    def test_hint_covers_footer_and_summary_issues_one_read_at(self):
+    @pytest.mark.parametrize("method", ["read_messages", "read_index"])
+    def test_hint_covers_footer_and_summary_issues_one_read_at(self, method):
         # Sufficient hint: one ReadAt covers footer + compressed summary.
         data, compressed = self._setup()
         tracking = TrackingSource(BytesReadSource(data))
         reader = Reader(tracking)
         hint = len(compressed) + FOOTER_LEN + 8  # covers footer + summary + slack
-        reader.read_messages(tail_prefetch=hint)
+        list(getattr(reader, method)(tail_prefetch=hint))
         assert tracking.read_at_calls == 1
 
     def test_hint_too_small_falls_back_to_two_read_ats(self):
@@ -212,3 +217,61 @@ class TestSummaryWithHint:
         reader = Reader(tracking)
         reader.read_messages(tail_prefetch=len(data) * 100)
         assert tracking.read_at_calls == 1
+
+@pytest.mark.parametrize("strategy", [None, ReadStrategy(1 << 20, 64, 3)])
+@pytest.mark.parametrize("order", [Order.TIME, Order.REVERSE_TIME])
+@pytest.mark.parametrize("video_decodable", [False, True])
+@pytest.mark.parametrize("file, topic, start, end", [
+    ("multi-group-mixed.td", "/groupB/y", 4000000, 4004700),
+    ("video-multi-gop-chunks.td", "/cam", 20, 60),
+])
+def test_read_index_without_payload(file, topic, start, end, order, strategy, video_decodable):
+    data = (Path(TS_FIXTURES) / file).read_bytes()
+    reference = Reader(BytesReadSource(data), topic_remap={topic: "renamed"})
+    index_start = reference.summary().topics_infos[0].index_chunk_info_list[0].offset
+
+    class IndexRegionSource(BytesReadSource):
+        def read_at(self, offset, n):
+            assert offset >= index_start, f"payload read at {offset}"
+            return super().read_at(offset, n)
+
+    for names in (None, ["renamed"], ["missing"]):
+        reader = Reader(IndexRegionSource(data), topic_remap={topic: "renamed"})
+        query = dict(topic_names=names, start_timestamp=start, end_timestamp=end,
+                     order=order, video_decodable=video_decodable)
+        expected = [IndexEntry(m.timestamp, m.topic_name, m.is_key_frame)
+                    for m in reference.read_messages(**query)]
+        assert list(reader.read_index(**query, strategy=strategy, copy=True)) == expected
+
+
+def test_read_index_preserves_duplicate_timestamps_at_zero():
+    def write(w):
+        w.open_topics(["imu"], [{}])
+        for ts in (0, 0, 1):
+            w.write_message("imu", b"data", timestamp=ts)
+        w.close_topic()
+
+    reader = Reader(BytesReadSource(build_file(write)))
+    assert list(reader.read_index(end_timestamp=0)) == [IndexEntry(0, "imu", False)] * 2
+
+
+def test_read_index_strategy_prefetches_candidate_chunks():
+    data = (Path(TS_FIXTURES) / "video-multi-gop-chunks.td").read_bytes()
+    source = TrackingSource(BytesReadSource(data))
+    reader = Reader(source)
+    group = reader.summary().topics_infos[0]
+    assert len(group.index_chunk_info_list) > 1
+
+    before = source.read_at_bytes
+    assert next(reader.read_index()).timestamp == 10
+    assert source.read_at_bytes - before == (
+        group.index_chunk_info_list[1].offset - group.index_chunk_info_list[0].offset
+    )
+
+    before = source.read_at_bytes
+    calls = source.read_at_calls
+    strategy = ReadStrategy(coalesce_gap=1, max_concurrency=2)
+    entries = list(reader.read_index(strategy=strategy))
+    assert len(entries) == 6
+    assert source.read_at_calls - calls == 1
+    assert source.read_at_bytes - before == group.total_len

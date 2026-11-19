@@ -18,7 +18,7 @@
 // effectively unlimited mux on HTTP/2). The Reader's cost-aware path bounds
 // concurrency to `maxConcurrency`; HTTP-level limits are an additional cap.
 //
-// `size()` is resolved lazily via a HEAD (or GET Range: bytes=0-0). We prefer
+// `size()` is resolved lazily via a HEAD (or GET Range: bytes=-1). We prefer
 // HEAD because most static-file servers respond cheaply, but fall back to a
 // 1-byte GET if the server forbids HEAD.
 
@@ -68,7 +68,7 @@ export class HttpRangeReadSource implements ReadSource {
     const probe = await this.fetchImpl(this.url, {
       ...this.init,
       method: "GET",
-      headers: { ...(this.init.headers ?? {}), Range: "bytes=0-0" },
+      headers: { ...(this.init.headers ?? {}), Range: "bytes=-1" },
     });
     if (!probe.ok && probe.status !== 206) {
       throw new Error(
@@ -81,7 +81,7 @@ export class HttpRangeReadSource implements ReadSource {
         `HttpRangeReadSource: server returned no Content-Length or Content-Range`,
       );
     }
-    // Format: "bytes 0-0/12345"
+    // Format: "bytes 12344-12344/12345"
     const m = /\/(\d+)$/.exec(cr);
     if (m === null) {
       throw new Error(`HttpRangeReadSource: malformed Content-Range: ${cr}`);

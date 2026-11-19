@@ -42,6 +42,7 @@ type TopicsGroupIterator struct {
 	startTimestamp  int64
 	endTimestamp    int64
 	order           Order
+	indexOnly       bool
 	isCompressed    bool
 	videoDecodable  bool
 	incrementFactor int
@@ -91,7 +92,8 @@ func newTopicsGroupIterator(it *MessageIterator, topicIds map[uint16]struct{}, t
 	}
 
 	return &TopicsGroupIterator{
-		rs: it.rs,
+		rs:        it.rs,
+		indexOnly: it.indexOnly,
 
 		loadBuf:     buffer.NewReusableBuffer(),
 		indexBuf:    buffer.NewReusableBuffer(),
@@ -133,6 +135,10 @@ func (it *TopicsGroupIterator) nextWithKeyFrameMark() (int64, uint16, []byte, bo
 		}
 		it.currentIndexChunkInfoIndex += it.incrementFactor
 
+		var outLens *[]int64
+		if !it.indexOnly {
+			outLens = &it.filteredMessageLens
+		}
 		sortAndFilter(
 			indexChunk.TopicIndexes,
 			indexChunk.UncompressedLen,
@@ -142,7 +148,7 @@ func (it *TopicsGroupIterator) nextWithKeyFrameMark() (int64, uint16, []byte, bo
 			it.videoDecodable,
 			it.scratch,
 			&it.filteredMessageIndexes,
-			&it.filteredMessageLens,
+			outLens,
 		)
 
 		it.currentMessageIndex = 0
@@ -150,7 +156,7 @@ func (it *TopicsGroupIterator) nextWithKeyFrameMark() (int64, uint16, []byte, bo
 			it.currentMessageIndex = len(it.filteredMessageIndexes) - 1
 		}
 
-		if len(it.filteredMessageIndexes) > 0 {
+		if !it.indexOnly && len(it.filteredMessageIndexes) > 0 {
 			if err := it.loadDataChunk(indexChunk.ChunkOffset, indexChunk.ChunkLen); err != nil {
 				return 0, 0, nil, false, err
 			}
@@ -158,10 +164,13 @@ func (it *TopicsGroupIterator) nextWithKeyFrameMark() (int64, uint16, []byte, bo
 	}
 
 	messageIndex := it.filteredMessageIndexes[it.currentMessageIndex]
-	rangeEnd := messageIndex.messageIndex.OffsetInChunk + it.filteredMessageLens[it.currentMessageIndex]
+	var data []byte
+	if !it.indexOnly {
+		start := messageIndex.messageIndex.OffsetInChunk
+		data = it.messageBuf.Data[start : start+it.filteredMessageLens[it.currentMessageIndex]]
+	}
 	it.currentMessageIndex += it.incrementFactor
-
-	return messageIndex.messageIndex.Timestamp, messageIndex.topicId, it.messageBuf.Data[messageIndex.messageIndex.OffsetInChunk:rangeEnd], messageIndex.isKeyFrame, nil
+	return messageIndex.messageIndex.Timestamp, messageIndex.topicId, data, messageIndex.isKeyFrame, nil
 }
 
 func (it *TopicsGroupIterator) loadIndexChunk(info *format.IndexChunkInfo, length int64) (*format.IndexChunk, error) {

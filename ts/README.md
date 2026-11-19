@@ -52,6 +52,22 @@ message:
 for await (const msg of reader.readMessages({ copy: true })) { ... }
 ```
 
+### Scan timestamps
+
+`readIndex` returns one metadata entry per matching message, including duplicate
+timestamps. It accepts the same options as `readMessages`. Index chunks load on
+demand by default. `strategy` prefetches the candidate chunks.
+
+`tailPrefetch` can fetch the footer and summary in one request. A large prefetch
+window can also cover payload bytes. `videoDecodable` includes video entries back
+to the anchoring key frame, even when it precedes the requested start time.
+
+```ts
+for await (const entry of reader.readIndex({ topicNames: ["/imu"] })) {
+  console.log(entry.timestamp, entry.topicName, entry.isKeyFrame);
+}
+```
+
 ### Order, time, and topic filters
 
 Topics not listed are skipped; chunks fully outside the `[start, end]` window

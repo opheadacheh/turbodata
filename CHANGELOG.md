@@ -10,7 +10,10 @@ note the affected SDK(s) where relevant.
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- Go, Python, and TypeScript readers can scan timestamps, topic names, and key
+  frame marks directly from the message index using the existing read options.
 
 ## [0.2.0] - 2026-11-04
 

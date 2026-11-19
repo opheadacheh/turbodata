@@ -34,10 +34,12 @@ import (
 // the caller (root package) sets before invoking Prepare; everything else is
 // runtime state.
 type MessageIterator struct {
-	rs ReadSource
+	rs        ReadSource
+	indexOnly bool
 
-	heap   heap.Interface
-	loaded bool
+	heap         heap.Interface
+	loaded       bool
+	pendingIndex *message // refill this group on the next index pull
 
 	// Configuration set by the caller before Prepare().
 	TopicNames     []string
@@ -70,9 +72,10 @@ type MessageIterator struct {
 // NewMessageIterator returns an iterator with default configuration. The caller
 // is expected to set fields (e.g. TopicNames, Order) and Summary before calling
 // Prepare.
-func NewMessageIterator(rs ReadSource) *MessageIterator {
+func NewMessageIterator(rs ReadSource, indexOnly bool) *MessageIterator {
 	return &MessageIterator{
 		rs:             rs,
+		indexOnly:      indexOnly,
 		Order:          TimeOrder,
 		StartTimestamp: 0,
 		EndTimestamp:   math.MaxInt64,
@@ -87,6 +90,8 @@ func (it *MessageIterator) Prepare() error {
 		it.heap = &MessageHeap{}
 	case ReverseTimeOrder:
 		it.heap = &MessageHeap{reverse: true}
+	default:
+		return errors.New("unsupported timestamp order")
 	}
 	heap.Init(it.heap)
 
@@ -269,6 +274,10 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 			}
 			var msgs []*messageIndexWithTopicId
 			var lens []int64
+			var outLens *[]int64
+			if !it.indexOnly {
+				outLens = &lens
+			}
 			sortAndFilter(
 				ic.TopicIndexes,
 				ic.UncompressedLen,
@@ -278,49 +287,53 @@ func (it *MessageIterator) prepareCostAware(topicIds map[uint16]struct{}, topicN
 				g.videoDecodable,
 				mergeScratch,
 				&msgs,
-				&lens,
+				outLens,
 			)
 			perGroupChunks[gi][ci] = decodedChunk{indexChunk: ic, messages: msgs, messageLens: lens}
 		}
 	}
 
-	// ---- Phase B: plan + fetch data ranges, chunk-level for compressed,
-	// message-level for uncompressed. We register every kept message as its
-	// own Range; Plan coalesces contiguous (and near-contiguous, per
-	// strategy.CoalesceGap) messages into single ReadOps, and NewLoadedBytes
-	// indexes each message offset individually for direct lookup.
-	var rangesB []iorange.Range
-	for gi, g := range scoped {
-		if g.isCompressed {
-			for _, dc := range perGroupChunks[gi] {
-				if len(dc.messages) == 0 {
-					continue
+	// Payload ranges are needed only for a message scan.
+	var loadedData *iorange.LoadedBytes
+	if !it.indexOnly {
+		// ---- Phase B: plan + fetch data ranges, chunk-level for compressed,
+		// message-level for uncompressed. We register every kept message as its
+		// own Range; Plan coalesces contiguous (and near-contiguous, per
+		// strategy.CoalesceGap) messages into single ReadOps, and NewLoadedBytes
+		// indexes each message offset individually for direct lookup.
+		var rangesB []iorange.Range
+		for gi, g := range scoped {
+			if g.isCompressed {
+				for _, dc := range perGroupChunks[gi] {
+					if len(dc.messages) == 0 {
+						continue
+					}
+					rangesB = append(rangesB, iorange.Range{
+						Offset: dc.indexChunk.ChunkOffset,
+						Length: dc.indexChunk.ChunkLen,
+					})
 				}
-				rangesB = append(rangesB, iorange.Range{
-					Offset: dc.indexChunk.ChunkOffset,
-					Length: dc.indexChunk.ChunkLen,
-				})
+				continue
 			}
-			continue
-		}
-		for _, dc := range perGroupChunks[gi] {
-			for k, msg := range dc.messages {
-				rangesB = append(rangesB, iorange.Range{
-					Offset: dc.indexChunk.ChunkOffset + msg.messageIndex.OffsetInChunk,
-					Length: dc.messageLens[k],
-				})
+			for _, dc := range perGroupChunks[gi] {
+				for k, msg := range dc.messages {
+					rangesB = append(rangesB, iorange.Range{
+						Offset: dc.indexChunk.ChunkOffset + msg.messageIndex.OffsetInChunk,
+						Length: dc.messageLens[k],
+					})
+				}
 			}
 		}
+		// rangesB is offset-sorted by construction: data chunks (and messages
+		// within them) are appended in writer order, which is increasing file
+		// offset. Plan requires this.
+		opsB, locB := iorange.Plan(rangesB, strategy.CoalesceGap, strategy.SplitThreshold)
+		bufsB, err := fetcher.Execute(ctx, opsB)
+		if err != nil {
+			return err
+		}
+		loadedData = iorange.NewLoadedBytes(rangesB, locB, bufsB)
 	}
-	// rangesB is offset-sorted by construction: data chunks (and messages
-	// within them) are appended in writer order, which is increasing file
-	// offset. Plan requires this.
-	opsB, locB := iorange.Plan(rangesB, strategy.CoalesceGap, strategy.SplitThreshold)
-	bufsB, err := fetcher.Execute(ctx, opsB)
-	if err != nil {
-		return err
-	}
-	loadedData := iorange.NewLoadedBytes(rangesB, locB, bufsB)
 
 	// ---- Build a preloadedTopicsGroupIterator per scoped group.
 	it.preloadedTopicsGroups = make([]*preloadedTopicsGroupIterator, 0, len(scoped))
@@ -360,18 +373,37 @@ func (it *MessageIterator) NextIntoWithKeyFrameMark(buf *buffer.ReusableBuffer) 
 	}
 	it.loaded = true
 
+	if it.pendingIndex != nil {
+		if err := it.advanceGroup(it.pendingIndex); err != nil {
+			return 0, "", false, err
+		}
+		it.pendingIndex = nil
+	}
+
 	if it.heap.Len() == 0 {
 		return 0, "", false, io.EOF
 	}
 
 	item, _ := heap.Pop(it.heap).(*message)
-	buf.Prepare(len(item.data))
-	copy(buf.Data, item.data)
+	if buf != nil {
+		buf.Prepare(len(item.data))
+		copy(buf.Data, item.data)
+	}
 
 	retTimestamp := item.timestamp
 	retTopicId := item.topicId
 	retMark := item.isKeyFrame
 
+	if it.indexOnly {
+		// A caller stopping at a chunk boundary need not fetch the next index.
+		it.pendingIndex = item
+	} else if err := it.advanceGroup(item); err != nil {
+		return 0, "", false, err
+	}
+	return retTimestamp, it.topicIdToNames[retTopicId], retMark, nil
+}
+
+func (it *MessageIterator) advanceGroup(item *message) error {
 	timestamp, topicId, data, mark, err := it.groupNext(item.groupIndex)
 	if err == nil {
 		item.isKeyFrame = mark
@@ -381,10 +413,10 @@ func (it *MessageIterator) NextIntoWithKeyFrameMark(buf *buffer.ReusableBuffer) 
 		heap.Push(it.heap, item)
 	}
 	if !errors.Is(err, io.EOF) && err != nil {
-		return 0, "", false, err
+		return err
 	}
 
-	return retTimestamp, it.topicIdToNames[retTopicId], retMark, nil
+	return nil
 }
 
 func (it *MessageIterator) groupNext(groupIndex int) (int64, uint16, []byte, bool, error) {

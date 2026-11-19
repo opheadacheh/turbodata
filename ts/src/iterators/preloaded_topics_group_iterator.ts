@@ -22,13 +22,15 @@ import type { LoadedBytes } from "../loaded_bytes.js";
 import type { MessageRef } from "../sort_and_filter.js";
 import type { IndexChunk } from "../types.js";
 
+const EMPTY_DATA = new Uint8Array(0);
+
 export class PreloadedTopicsGroupIterator {
   private readonly isCompressed: boolean;
   private readonly reverse: boolean;
   private readonly indexChunks: IndexChunk[];
   private readonly chunkMessages: MessageRef[][];
   private readonly chunkMsgLens: bigint[][];
-  private readonly loadedData: LoadedBytes;
+  private readonly loadedData: LoadedBytes | undefined;
   private readonly decompress: Decompressor;
 
   // Decompressed buffer for the *current* compressed data chunk; undefined
@@ -45,7 +47,7 @@ export class PreloadedTopicsGroupIterator {
     indexChunks: IndexChunk[];
     chunkMessages: MessageRef[][];
     chunkMsgLens: bigint[][];
-    loadedData: LoadedBytes;
+    loadedData: LoadedBytes | undefined;
     decompress: Decompressor;
   }) {
     this.isCompressed = args.isCompressed;
@@ -85,6 +87,12 @@ export class PreloadedTopicsGroupIterator {
         continue;
       }
 
+      const msg = msgs[this.msgIdx]!;
+      if (this.loadedData === undefined) {
+        this.advanceMessage();
+        return { isKeyFrame: msg.isKeyFrame, timestamp: msg.timestamp, topicId: msg.topicId, data: EMPTY_DATA };
+      }
+
       // Materialize this chunk's decompressed bytes on first touch.
       if (this.isCompressed && this.loadedChunkIdx !== this.chunkIdx) {
         const compressed = this.loadedData.get(
@@ -99,7 +107,6 @@ export class PreloadedTopicsGroupIterator {
         this.loadedChunkIdx = this.chunkIdx;
       }
 
-      const msg = msgs[this.msgIdx]!;
       const length = this.chunkMsgLens[this.chunkIdx]![this.msgIdx]!;
       const chunkOffset = this.indexChunks[this.chunkIdx]!.chunkOffset;
 

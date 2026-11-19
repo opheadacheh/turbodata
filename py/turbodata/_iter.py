@@ -55,6 +55,7 @@ def sort_and_filter(
     start_timestamp: int,
     end_timestamp: int,
     video_decodable: bool = False,
+    *, include_lengths: bool = True,
 ) -> Tuple[List[_MsgIdxWithTopicId], List[int]]:
     """Compute the kept-message list for a single decoded IndexChunk.
 
@@ -89,14 +90,6 @@ def sort_and_filter(
                 sorted_items.append(_MsgIdxWithTopicId(ti.id, mi, i in keys))
         sorted_items.sort(key=lambda it: it.message_index.offset_in_chunk)
 
-    sorted_lens: List[int] = [0] * len(sorted_items)
-    for i in range(len(sorted_items) - 1):
-        sorted_lens[i] = (
-            sorted_items[i + 1].message_index.offset_in_chunk
-            - sorted_items[i].message_index.offset_in_chunk
-        )
-    sorted_lens[-1] = total_len - sorted_items[-1].message_index.offset_in_chunk
-
     # For video-decodable groups, snap the lower bound back to the anchoring
     # key frame so the kept sequence is decodable cold.
     effective_start = start_timestamp
@@ -112,7 +105,11 @@ def sort_and_filter(
         if ts < effective_start or ts > end_timestamp:
             continue
         out_msgs.append(item)
-        out_lens.append(sorted_lens[i])
+        if include_lengths:
+            end = total_len
+            if i + 1 < len(sorted_items):
+                end = sorted_items[i + 1].message_index.offset_in_chunk
+            out_lens.append(end - item.message_index.offset_in_chunk)
     return out_msgs, out_lens
 
 
@@ -180,7 +177,9 @@ class TopicsGroupIterator:
         end_timestamp: int,
         order: Order,
         video_decodable: bool = False,
+        index_only: bool = False,
     ) -> None:
+        self._index_only = index_only
         self._source = source
         self._topic_ids = topic_ids
         self._start = start_timestamp
@@ -232,19 +231,22 @@ class TopicsGroupIterator:
                 self._start,
                 self._end,
                 self._video_decodable,
+                include_lengths=not self._index_only,
             )
             self._current_msg = 0
             if self._order == Order.REVERSE_TIME:
                 self._current_msg = len(self._filtered_msgs) - 1
 
-            if self._filtered_msgs:
+            if self._filtered_msgs and not self._index_only:
                 self._load_data_chunk(
                     index_chunk.chunk_offset, index_chunk.chunk_len
                 )
 
         item = self._filtered_msgs[self._current_msg]
-        end = item.message_index.offset_in_chunk + self._filtered_lens[self._current_msg]
-        data = self._data_buf[item.message_index.offset_in_chunk : end]
+        data = b""
+        if not self._index_only:
+            start = item.message_index.offset_in_chunk
+            data = self._data_buf[start : start + self._filtered_lens[self._current_msg]]
         self._current_msg += self._increment
         return (item.message_index.timestamp, item.topic_id, data, item.is_key_frame)
 
@@ -273,7 +275,7 @@ class PreloadedTopicsGroupIterator:
         index_chunks: List[_codec.IndexChunk],
         chunk_messages: List[List[_MsgIdxWithTopicId]],
         chunk_msg_lens: List[List[int]],
-        loaded_data: LoadedBytes,
+        loaded_data: Optional[LoadedBytes],
     ) -> None:
         self._is_compressed = is_compressed
         self._order = order
@@ -305,6 +307,11 @@ class PreloadedTopicsGroupIterator:
                 self._advance_chunk()
                 continue
 
+            msg = msgs[self._msg_idx]
+            if self._loaded is None:
+                self._advance_message()
+                return (msg.message_index.timestamp, msg.topic_id, b"", msg.is_key_frame)
+
             if self._is_compressed and self._loaded_chunk_idx != self._chunk_idx:
                 compressed = self._loaded.get(
                     self._index_chunks[self._chunk_idx].chunk_offset
@@ -317,7 +324,6 @@ class PreloadedTopicsGroupIterator:
                 self._decompressed = _compress.decompress(compressed)
                 self._loaded_chunk_idx = self._chunk_idx
 
-            msg = msgs[self._msg_idx]
             length = self._chunk_msg_lens[self._chunk_idx][self._msg_idx]
             chunk_off = self._index_chunks[self._chunk_idx].chunk_offset
             if self._is_compressed:

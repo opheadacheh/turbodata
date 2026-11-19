@@ -17,7 +17,9 @@ package turbodata
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -260,8 +262,8 @@ func TestSummaryWithHint(t *testing.T) {
 		reader := NewReader(c)
 
 		hint := int64(len(compressed) + format.FooterLen + 8) // covers footer + summary + slack
-		if _, err := reader.summaryWithHint(hint); err != nil {
-			t.Fatalf("summaryWithHint: %v", err)
+		if _, err := reader.ReadIndex(WithTailPrefetch(hint)); err != nil {
+			t.Fatalf("ReadIndex: %v", err)
 		}
 		if c.ReadAtCalls != 1 {
 			t.Errorf("expected exactly 1 ReadAt for prefetch hit, got %d", c.ReadAtCalls)
@@ -287,4 +289,128 @@ func TestSummaryWithHint(t *testing.T) {
 			t.Errorf("hint=0 should not issue 1 Seek and 0 Read, got SeekCalls=%d ReadCalls=%d", c.SeekCalls, c.ReadCalls)
 		}
 	})
+}
+
+// indexRegionSource rejects payload reads through both the serial and the
+// concurrent I/O entry points, including speculative or coalesced ranges.
+type indexRegionSource struct {
+	*bytes.Reader
+	indexStart int64
+}
+
+func (s *indexRegionSource) Read(p []byte) (int, error) {
+	offset, err := s.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, err
+	}
+	if offset < s.indexStart {
+		return 0, fmt.Errorf("payload read at %d", offset)
+	}
+	return s.Reader.Read(p)
+}
+
+func (s *indexRegionSource) ReadAt(p []byte, offset int64) (int, error) {
+	if offset < s.indexStart {
+		return 0, fmt.Errorf("payload read at %d", offset)
+	}
+	return s.Reader.ReadAt(p, offset)
+}
+
+func TestReadIndex(t *testing.T) {
+	for _, tc := range []struct {
+		file           string
+		topic          string
+		start, end     int64
+		videoDecodable bool
+	}{
+		{"multi-group-mixed.td", "/groupB/y", 4000000, 4004700, true},
+		{"video-multi-gop-chunks.td", "/cam", 20, 60, false},
+		{"video-multi-gop-chunks.td", "/cam", 20, 60, true},
+	} {
+		t.Run(tc.file, func(t *testing.T) {
+			file, err := os.ReadFile("../../ts/test/fixtures/" + tc.file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			remap := WithTopicRemap(map[string]string{tc.topic: "renamed"})
+			reference := NewReader(bytes.NewReader(file), remap)
+			summary, err := reference.Summary()
+			if err != nil {
+				t.Fatal(err)
+			}
+			indexStart := summary.TopicsInfos[0].IndexChunkInfoList[0].Offset
+			for _, order := range []Order{TimeOrder, ReverseTimeOrder} {
+				for _, topics := range [][]string{nil, {"renamed"}, {"missing"}} {
+					opts := []ReadOption{WithTopicNames(topics), WithStartTimestamp(tc.start), WithEndTimestamp(tc.end), WithOrder(order)}
+					if tc.videoDecodable {
+						opts = append(opts, WithVideoDecodable())
+					}
+					msgs, err := reference.ReadMessages(opts...)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var want []IndexEntry
+					buf := NewReusableBuffer()
+					for {
+						ts, name, mark, err := msgs.NextIntoWithKeyFrameMark(buf)
+						if err == io.EOF {
+							break
+						}
+						if err != nil {
+							t.Fatal(err)
+						}
+						want = append(want, IndexEntry{Timestamp: ts, TopicName: name, IsKeyFrame: mark})
+					}
+					for _, strategy := range []*ReadStrategy{nil, {CoalesceGap: 1 << 20, SplitThreshold: 64, MaxConcurrency: 3}} {
+						r := NewReader(&indexRegionSource{bytes.NewReader(file), indexStart}, remap)
+						indexOpts := opts
+						if strategy != nil {
+							indexOpts = append(indexOpts, WithReadStrategy(*strategy))
+						}
+						it, err := r.ReadIndex(indexOpts...)
+						if err != nil {
+							t.Fatal(err)
+						}
+						var got []IndexEntry
+						for {
+							entry, err := it.Next()
+							if err == io.EOF {
+								break
+							}
+							if err != nil {
+								t.Fatal(err)
+							}
+							got = append(got, entry)
+						}
+						if diff := cmp.Diff(want, got); diff != "" {
+							t.Fatalf("index entries (-want +got):\n%s", diff)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestReadIndexStopsAtChunkBoundary(t *testing.T) {
+	file, err := os.ReadFile("../../ts/test/fixtures/video-multi-gop-chunks.td")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := &countingReadSource{rs: bytes.NewReader(file)}
+	it, err := NewReader(source).ReadIndex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first index chunk has two frames. Returning both should still
+	// require just one serial chunk read, even at the chunk boundary.
+	for _, ts := range []int64{10, 20} {
+		entry, err := it.Next()
+		if err != nil || entry.Timestamp != ts {
+			t.Fatalf("Next() = %v, %v; want timestamp %d", entry, err, ts)
+		}
+	}
+	if source.ReadCalls != 1 {
+		t.Fatalf("read %d chunks, want 1", source.ReadCalls)
+	}
 }

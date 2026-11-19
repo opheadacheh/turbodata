@@ -43,6 +43,7 @@ export function sortAndFilter(
   startTimestamp: bigint,
   endTimestamp: bigint,
   videoDecodable = false,
+  includeLengths = true,
 ): { msgs: MessageRef[]; lens: bigint[] } {
   let total = 0;
   for (const ti of topicIndexes) {
@@ -94,14 +95,6 @@ export function sortAndFilter(
     }
   }
 
-  // Per-entry lengths from offset deltas.
-  const allLens = new Array<bigint>(sorted.length);
-  for (let i = 0; i < sorted.length - 1; i++) {
-    allLens[i] = sorted[i + 1]!.mi.offsetInChunk - sorted[i]!.mi.offsetInChunk;
-  }
-  allLens[allLens.length - 1] =
-    totalLen - sorted[sorted.length - 1]!.mi.offsetInChunk;
-
   // For video-decodable groups, snap the lower bound back to the anchoring
   // key frame so the kept sequence is decodable cold.
   let effectiveStart = startTimestamp;
@@ -127,7 +120,10 @@ export function sortAndFilter(
       topicId: item.topicId,
       offsetInChunk: item.mi.offsetInChunk,
     });
-    lens.push(allLens[i]!);
+    if (includeLengths) {
+      const end = sorted[i + 1]?.mi.offsetInChunk ?? totalLen;
+      lens.push(end - item.mi.offsetInChunk);
+    }
   }
   return { msgs, lens };
 }

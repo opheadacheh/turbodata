@@ -23,6 +23,7 @@ export {
 } from "./reader.js";
 export type {
   Frame,
+  IndexEntry,
   Message,
   ReaderOptions,
   SampleQuery,

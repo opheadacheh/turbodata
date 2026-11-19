@@ -227,16 +227,16 @@ func (r *Reader) summaryWithHint(prefetch int64) (*format.Summary, error) {
 }
 
 func (r *Reader) ReadMessages(opts ...ReadOption) (*iter.MessageIterator, error) {
-	// Parse options before loading summary so that WithTailPrefetch can take
-	// effect on the summary read, and WithReadStrategy can be detected before
-	// the iterator is prepared.
-	it := iter.NewMessageIterator(r.rs)
+	return r.readIterator(opts, false)
+}
+
+func (r *Reader) readIterator(opts []ReadOption, indexOnly bool) (*iter.MessageIterator, error) {
+	it := iter.NewMessageIterator(r.rs, indexOnly)
 	for _, opt := range opts {
 		if err := opt(it); err != nil {
 			return nil, err
 		}
 	}
-
 	summary, err := r.summaryWithHint(it.TailPrefetch)
 	if err != nil {
 		return nil, err
@@ -269,4 +269,33 @@ func (r *Reader) ReadMessages(opts ...ReadOption) (*iter.MessageIterator, error)
 		return nil, err
 	}
 	return it, nil
+}
+
+// IndexEntry contains the writer-recorded metadata for one message.
+type IndexEntry struct {
+	Timestamp  int64
+	TopicName  string
+	IsKeyFrame bool
+}
+
+// IndexIterator returns one record per matching message, including duplicates.
+type IndexIterator struct {
+	it *iter.MessageIterator
+}
+
+// ReadIndex returns message metadata from the index using the same options as
+// ReadMessages. WithTailPrefetch may include payload bytes in the summary read.
+// WithVideoDecodable includes index entries back to the anchoring key frame.
+func (r *Reader) ReadIndex(opts ...ReadOption) (*IndexIterator, error) {
+	it, err := r.readIterator(opts, true)
+	if err != nil {
+		return nil, err
+	}
+	return &IndexIterator{it: it}, nil
+}
+
+// Next returns io.EOF when the index has been exhausted.
+func (it *IndexIterator) Next() (IndexEntry, error) {
+	ts, name, mark, err := it.it.NextIntoWithKeyFrameMark(nil)
+	return IndexEntry{Timestamp: ts, TopicName: name, IsKeyFrame: mark}, err
 }
