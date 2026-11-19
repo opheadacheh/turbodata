@@ -25,7 +25,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { Reader, StrategyForLatency } from "../src/index.js";
+import { HttpRangeReadSource, Reader, StrategyForLatency, type IndexEntry } from "../src/index.js";
 
 import {
   BytesReadSource,
@@ -158,4 +158,92 @@ describe("Reader on Go fixtures", () => {
       });
     });
   }
+});
+
+describe("readIndex", () => {
+  for (const [file, topic, startTimestamp, endTimestamp, videoDecodable] of [
+    ["multi-group-mixed.td", "/groupB/y", 4000000n, 4004700n, true],
+    ["video-multi-gop-chunks.td", "/cam", 20n, 60n, false],
+    ["video-multi-gop-chunks.td", "/cam", 20n, 60n, true],
+  ] as const) {
+    it(`matches message metadata without payload reads on ${file} (videoDecodable=${videoDecodable})`, async () => {
+      const bytes = readFixture(file);
+      const remap = { topicRemap: { [topic]: "renamed" } };
+      const reference = new Reader(new BytesReadSource(bytes), remap);
+      const summary = await reference.summary();
+      const indexStart = summary.topicsInfos[0]!.indexChunkInfoList[0]!.offset;
+      class IndexRegionSource extends BytesReadSource {
+        override async read(offset: bigint, length: bigint) {
+          expect(offset).toBeGreaterThanOrEqual(indexStart);
+          return super.read(offset, length);
+        }
+      }
+      for (const order of ["time", "reverse-time"] as const) {
+        for (const topicNames of [undefined, ["renamed"], ["missing"]]) {
+          const query = { order, topicNames, startTimestamp, endTimestamp, videoDecodable };
+          const expected: IndexEntry[] = [];
+          for await (const { topicName, timestamp, isKeyFrame } of reference.readMessages(query)) {
+            expected.push({ topicName, timestamp, isKeyFrame });
+          }
+          for (const strategy of [undefined, { coalesceGap: 1n << 20n, splitThreshold: 64n, maxConcurrency: 3 }]) {
+            const reader = new Reader(new IndexRegionSource(bytes), remap);
+            const entries: IndexEntry[] = [];
+            for await (const entry of reader.readIndex({ ...query, strategy, copy: true })) {
+              entries.push(entry);
+            }
+            expect(entries).toEqual(expected);
+          }
+        }
+      }
+    });
+  }
+});
+
+it("tailPrefetch loads the index scan's footer and summary in one request", async () => {
+  const bytes = readFixture("video-multi-gop-chunks.td");
+  for (const [tailPrefetch, expectedReads] of [[0n, 2], [BigInt(bytes.length), 1]] as const) {
+    const source = new BytesReadSource(bytes);
+    const entries = new Reader(source).readIndex({ tailPrefetch, topicNames: ["missing"] });
+    expect((await entries.next()).done).toBe(true);
+    expect(source.reads).toBe(expectedReads);
+  }
+});
+
+it("HTTP index scan stays in the metadata region when HEAD is unavailable", async () => {
+  const bytes = readFixture("video-multi-gop-chunks.td");
+  const reference = new Reader(new BytesReadSource(bytes));
+  const summary = await reference.summary();
+  const indexStart = Number(summary.topicsInfos[0]!.indexChunkInfoList[0]!.offset);
+  const source = new HttpRangeReadSource("https://example.test/video.td", {
+    async fetch(_input, init) {
+      if (init?.method === "HEAD") {
+        return new Response(null, { status: 405 });
+      }
+      const range = new Headers(init?.headers).get("Range");
+      if (range === "bytes=-1") {
+        const last = bytes.length - 1;
+        return new Response(bytes.slice(last), {
+          status: 206, headers: { "Content-Range": `bytes ${last}-${last}/${bytes.length}` },
+        });
+      }
+      const [, start, end] = /^bytes=(\d+)-(\d+)$/.exec(range ?? "")!;
+      expect(Number(start)).toBeGreaterThanOrEqual(indexStart);
+      return new Response(bytes.slice(Number(start), Number(end) + 1), { status: 206 });
+    },
+  });
+  const timestamps: bigint[] = [];
+  for await (const entry of new Reader(source).readIndex()) timestamps.push(entry.timestamp);
+  expect(timestamps).toEqual([10n, 20n, 30n, 40n, 50n, 60n]);
+});
+
+it("stopping at an index chunk boundary leaves later chunks unread", async () => {
+  const source = new BytesReadSource(readFixture("video-multi-gop-chunks.td"));
+  const reader = new Reader(source);
+  await reader.summary();
+  const before = source.reads;
+  const entries = reader.readIndex();
+  expect((await entries.next()).value.timestamp).toBe(10n);
+  expect((await entries.next()).value.timestamp).toBe(20n);
+  await entries.return?.();
+  expect(source.reads - before).toBe(1);
 });

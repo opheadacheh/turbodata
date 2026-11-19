@@ -31,7 +31,6 @@ type sortAndFilterMergeScratch struct {
 
 	// Sorted-but-not-yet-filtered working slices. Capacity grows; never shrinks.
 	sortedItems []*messageIndexWithTopicId
-	sortedLens  []int64
 
 	// Pool of *messageIndexWithTopicId. Reused for both heap-internal items
 	// and emitted output items. Items handed to the caller via outMsgs are
@@ -80,7 +79,7 @@ func sortAndFilter(
 	videoDecodable bool,
 	scratch *sortAndFilterMergeScratch,
 	outMsgs *[]*messageIndexWithTopicId,
-	outLens *[]int64,
+	outLens *[]int64, // nil for an index scan
 ) {
 	// Return any previously-emitted items in *outMsgs to the pool; reset.
 	for _, item := range *outMsgs {
@@ -88,7 +87,9 @@ func sortAndFilter(
 		scratch.itemPool.Put(item)
 	}
 	*outMsgs = (*outMsgs)[:0]
-	*outLens = (*outLens)[:0]
+	if outLens != nil {
+		*outLens = (*outLens)[:0]
+	}
 
 	totalMessages := 0
 	for _, ti := range topicIndexes {
@@ -103,11 +104,6 @@ func sortAndFilter(
 		scratch.sortedItems = make([]*messageIndexWithTopicId, 0, totalMessages)
 	} else {
 		scratch.sortedItems = scratch.sortedItems[:0]
-	}
-	if cap(scratch.sortedLens) < totalMessages {
-		scratch.sortedLens = make([]int64, totalMessages)
-	} else {
-		scratch.sortedLens = scratch.sortedLens[:totalMessages]
 	}
 
 	if len(topicIndexes) == 1 {
@@ -155,12 +151,6 @@ func sortAndFilter(
 		}
 	}
 
-	// Compute per-entry lengths from offset deltas.
-	for i := 0; i < len(scratch.sortedItems)-1; i++ {
-		scratch.sortedLens[i] = scratch.sortedItems[i+1].messageIndex.OffsetInChunk - scratch.sortedItems[i].messageIndex.OffsetInChunk
-	}
-	scratch.sortedLens[len(scratch.sortedItems)-1] = totalLen - scratch.sortedItems[len(scratch.sortedItems)-1].messageIndex.OffsetInChunk
-
 	// For video-decodable groups, snap the lower bound back to the anchoring
 	// key frame so the kept sequence is decodable cold.
 	effectiveStart := startTimestamp
@@ -191,7 +181,13 @@ func sortAndFilter(
 		}
 		_, item.isKeyFrame = keys[item.messageIndex]
 		*outMsgs = append(*outMsgs, item)
-		*outLens = append(*outLens, scratch.sortedLens[i])
+		if outLens != nil {
+			end := totalLen
+			if i+1 < len(scratch.sortedItems) {
+				end = scratch.sortedItems[i+1].messageIndex.OffsetInChunk
+			}
+			*outLens = append(*outLens, end-item.messageIndex.OffsetInChunk)
+		}
 	}
 }
 

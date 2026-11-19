@@ -22,7 +22,10 @@ import type { ReadSource } from "../read_source.js";
 import { sortAndFilter, type MessageRef } from "../sort_and_filter.js";
 import { META_KEY_COMPRESSED, type IndexChunkInfo, type TopicsInfo } from "../types.js";
 
+const EMPTY_DATA = new Uint8Array(0);
+
 export class TopicsGroupIterator {
+  private readonly indexOnly: boolean;
   private readonly rs: ReadSource;
   private readonly decompress: Decompressor;
   private readonly topicIds: Set<number>;
@@ -55,8 +58,10 @@ export class TopicsGroupIterator {
     topicsInfo: TopicsInfo;
     /** When true, snap the per-chunk lower bound back to the GOP key frame. */
     videoDecodable?: boolean;
+    indexOnly?: boolean;
   }) {
     this.rs = args.rs;
+    this.indexOnly = args.indexOnly === true;
     this.decompress = args.decompress;
     this.topicIds = args.topicIds;
     this.startTimestamp = args.startTimestamp;
@@ -137,12 +142,13 @@ export class TopicsGroupIterator {
     }
 
     const ref = this.currentMessages[this.msgIdx]!;
-    const len = this.currentLens[this.msgIdx]!;
+    let data: Uint8Array = EMPTY_DATA;
+    if (this.dataBuffer !== undefined) {
+      const start = Number(ref.offsetInChunk);
+      const end = start + Number(this.currentLens[this.msgIdx]!);
+      data = this.dataBuffer.subarray(start, end);
+    }
     this.msgIdx += this.reverse ? -1 : 1;
-
-    const start = Number(ref.offsetInChunk);
-    const end = start + Number(len);
-    const data = this.dataBuffer!.subarray(start, end);
     return {
       isKeyFrame: ref.isKeyFrame,
       timestamp: ref.timestamp,
@@ -167,11 +173,12 @@ export class TopicsGroupIterator {
       this.startTimestamp,
       this.endTimestamp,
       this.videoDecodable,
+      !this.indexOnly,
     );
     this.currentMessages = filtered.msgs;
     this.currentLens = filtered.lens;
 
-    if (filtered.msgs.length === 0) {
+    if (this.indexOnly || filtered.msgs.length === 0) {
       this.dataBuffer = undefined;
       return;
     }

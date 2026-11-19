@@ -35,7 +35,7 @@ type preloadedTopicsGroupIterator struct {
 	chunkMessages [][]*messageIndexWithTopicId // parallel to indexChunks
 	chunkMsgLens  [][]int64                    // parallel to indexChunks
 
-	loadedData *iorange.LoadedBytes
+	loadedData *iorange.LoadedBytes // nil for an index scan
 
 	// Reused across chunks; only allocated when isCompressed.
 	decompressBuf *buffer.ReusableBuffer
@@ -63,7 +63,7 @@ func newPreloadedTopicsGroupIterator(
 		loadedData:     loadedData,
 		loadedChunkIdx: -1,
 	}
-	if isCompressed {
+	if isCompressed && loadedData != nil {
 		it.decompressBuf = buffer.NewReusableBuffer()
 	}
 	if order == ReverseTimeOrder {
@@ -99,6 +99,12 @@ func (it *preloadedTopicsGroupIterator) nextWithKeyFrameMark() (int64, uint16, [
 			continue
 		}
 
+		msg := msgs[it.msgIdx]
+		if it.loadedData == nil {
+			it.advanceMessage()
+			return msg.messageIndex.Timestamp, msg.topicId, nil, msg.isKeyFrame, nil
+		}
+
 		// Materialize this chunk's compressed buffer on first touch.
 		if it.isCompressed && it.loadedChunkIdx != it.chunkIdx {
 			compressed := it.loadedData.Get(it.indexChunks[it.chunkIdx].ChunkOffset)
@@ -108,7 +114,6 @@ func (it *preloadedTopicsGroupIterator) nextWithKeyFrameMark() (int64, uint16, [
 			it.loadedChunkIdx = it.chunkIdx
 		}
 
-		msg := msgs[it.msgIdx]
 		length := it.chunkMsgLens[it.chunkIdx][it.msgIdx]
 		chunkOffset := it.indexChunks[it.chunkIdx].ChunkOffset
 

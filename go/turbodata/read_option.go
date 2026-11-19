@@ -74,7 +74,7 @@ func WithOrder(order Order) ReadOption {
 	}
 }
 
-// WithReadStrategy switches ReadMessages onto the cost-aware reader path with
+// WithReadStrategy switches ReadMessages and ReadIndex onto the cost-aware path with
 // the given strategy. Without this option, the reader uses the default
 // memory-minimal path (lazy Seek+Read, one chunk at a time).
 func WithReadStrategy(s ReadStrategy) ReadOption {

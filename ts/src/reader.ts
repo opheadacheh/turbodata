@@ -40,12 +40,15 @@ import {
   type TopicsInfo,
 } from "./types.js";
 
-export interface Message {
+export interface IndexEntry {
   /** Writer-recorded key frame mark; false for non-video messages, independent of videoDecodable. */
   isKeyFrame: boolean;
   /** int64 nanosecond (or arbitrary unit) timestamp from the writer. */
   timestamp: bigint;
   topicName: string;
+}
+
+export interface Message extends IndexEntry {
   /**
    * Message bytes. By default this aliases an internal reusable buffer and
    * is only valid until the next iteration step. Pass `{ copy: true }` to
@@ -389,6 +392,27 @@ export class Reader {
    * same returned async iterable is supported.
    */
   readMessages(opts: ReadOptions = {}): AsyncIterableIterator<Message> {
+    const copy = opts.copy === true;
+    return this.readEntries(opts, false, (timestamp, topicName, isKeyFrame, data) => ({
+      timestamp, topicName, isKeyFrame, data: copy ? new Uint8Array(data) : data,
+    }));
+  }
+
+  /** Yield per-message metadata from the index with the same options as readMessages.
+   * tailPrefetch may include payload bytes in the summary read.
+   * videoDecodable includes index entries back to the anchoring key frame.
+   */
+  readIndex(opts: ReadOptions = {}): AsyncIterableIterator<IndexEntry> {
+    return this.readEntries(opts, true, (timestamp, topicName, isKeyFrame) => ({
+      timestamp, topicName, isKeyFrame,
+    }));
+  }
+
+  private readEntries<T>(
+    opts: ReadOptions,
+    indexOnly: boolean,
+    makeEntry: (timestamp: bigint, topicName: string, isKeyFrame: boolean, data: Uint8Array) => T,
+  ): AsyncIterableIterator<T> {
     const reader = this;
     const tailPrefetch = opts.tailPrefetch ?? 0n;
     const startTimestamp = opts.startTimestamp ?? 0n;
@@ -396,11 +420,11 @@ export class Reader {
     const reverse = opts.order === "reverse-time";
     const wantedNames = opts.topicNames;
     const strategy = opts.strategy;
-    const copy = opts.copy === true;
     const videoDecodable = opts.videoDecodable === true;
 
     let initialized = false;
     let exhausted = false;
+    let pendingGroup: number | undefined;
 
     let groupIts: GroupIt[] = [];
     const heap = new MessageHeap<{
@@ -410,6 +434,15 @@ export class Reader {
       data: Uint8Array;
     }>(reverse);
     const idToName = new Map<number, string>();
+
+    const pullGroup = async (groupIdx: number): Promise<void> => {
+      const m = await groupIts[groupIdx]!.next();
+      if (m !== undefined) {
+        heap.push(m.timestamp, {
+          isKeyFrame: m.isKeyFrame, groupIdx, topicId: m.topicId, data: m.data,
+        });
+      }
+    };
 
     const init = async (): Promise<void> => {
       const summary = await reader.summaryWithHint(tailPrefetch);
@@ -455,6 +488,7 @@ export class Reader {
           reverse,
           strategy,
           videoDecodable,
+          indexOnly,
         });
       } else {
         groupIts = reader.prepareDefault({
@@ -465,29 +499,21 @@ export class Reader {
           endTimestamp,
           reverse,
           videoDecodable,
+          indexOnly,
         });
       }
 
       // Prime the heap with one message from each group.
       for (let i = 0; i < groupIts.length; i++) {
-        const m = await groupIts[i]!.next();
-        if (m === undefined) {
-          continue;
-        }
-        heap.push(m.timestamp, {
-          isKeyFrame: m.isKeyFrame,
-          groupIdx: i,
-          topicId: m.topicId,
-          data: m.data,
-        });
+        await pullGroup(i);
       }
     };
 
-    const iter: AsyncIterableIterator<Message> = {
+    const iter: AsyncIterableIterator<T> = {
       [Symbol.asyncIterator]() {
         return iter;
       },
-      async next(): Promise<IteratorResult<Message>> {
+      async next(): Promise<IteratorResult<T>> {
         if (exhausted) {
           return { value: undefined, done: true };
         }
@@ -495,30 +521,26 @@ export class Reader {
           await init();
           initialized = true;
         }
+        if (pendingGroup !== undefined) {
+          await pullGroup(pendingGroup);
+          pendingGroup = undefined;
+        }
         const top = heap.pop();
         if (top === undefined) {
           exhausted = true;
           return { value: undefined, done: true };
         }
-        const out: Message = {
-          isKeyFrame: top.value.isKeyFrame,
-          timestamp: top.priority,
-          topicName: idToName.get(top.value.topicId) ?? "",
-          data: copy ? new Uint8Array(top.value.data) : top.value.data,
-        };
-        // Pull the next message from the same group and re-heap.
-        const nm = await groupIts[top.value.groupIdx]!.next();
-        if (nm !== undefined) {
-          heap.push(nm.timestamp, {
-            isKeyFrame: nm.isKeyFrame,
-            groupIdx: top.value.groupIdx,
-            topicId: nm.topicId,
-            data: nm.data,
-          });
+        const out = makeEntry(
+          top.priority, idToName.get(top.value.topicId)!, top.value.isKeyFrame, top.value.data,
+        );
+        if (indexOnly) {
+          pendingGroup = top.value.groupIdx;
+        } else {
+          await pullGroup(top.value.groupIdx);
         }
         return { value: out, done: false };
       },
-      async return(): Promise<IteratorResult<Message>> {
+      async return(): Promise<IteratorResult<T>> {
         exhausted = true;
         return { value: undefined, done: true };
       },
@@ -627,6 +649,7 @@ export class Reader {
     endTimestamp: bigint;
     reverse: boolean;
     videoDecodable: boolean;
+    indexOnly: boolean;
   }): GroupIt[] {
     const out: GroupIt[] = [];
     for (const ti of args.summary.topicsInfos) {
@@ -643,6 +666,7 @@ export class Reader {
         reverse: args.reverse,
         topicsInfo: ti,
         videoDecodable: args.videoDecodable && isVideoTopicsInfo(ti),
+        indexOnly: args.indexOnly,
       });
       if (!it.hasAny()) {
         continue;
@@ -663,6 +687,7 @@ export class Reader {
     reverse: boolean;
     strategy: import("./read_strategy.js").ReadStrategy;
     videoDecodable: boolean;
+    indexOnly: boolean;
   }): Promise<GroupIt[]> {
     interface ScopedGroup {
       topicsInfo: TopicsInfo;
@@ -753,6 +778,7 @@ export class Reader {
           args.startTimestamp,
           args.endTimestamp,
           g.groupVideo,
+          !args.indexOnly,
         );
         perGroupChunks[gi]!.push({
           indexChunk: ic,
@@ -762,36 +788,39 @@ export class Reader {
       }
     }
 
-    // ---- Phase B: plan + fetch data ranges. Chunk-level for compressed,
-    // per-message for uncompressed.
-    const rangesB: Range[] = [];
-    for (let gi = 0; gi < scoped.length; gi++) {
-      const g = scoped[gi]!;
-      if (g.isCompressed) {
-        for (const dc of perGroupChunks[gi]!) {
-          if (dc.messages.length === 0) {
-            continue;
+    let loadedData: LoadedBytes | undefined;
+    if (!args.indexOnly) {
+      // ---- Phase B: plan + fetch data ranges. Chunk-level for compressed,
+      // per-message for uncompressed.
+      const rangesB: Range[] = [];
+      for (let gi = 0; gi < scoped.length; gi++) {
+        const g = scoped[gi]!;
+        if (g.isCompressed) {
+          for (const dc of perGroupChunks[gi]!) {
+            if (dc.messages.length === 0) {
+              continue;
+            }
+            rangesB.push({
+              offset: dc.indexChunk.chunkOffset,
+              length: dc.indexChunk.chunkLen,
+            });
           }
-          rangesB.push({
-            offset: dc.indexChunk.chunkOffset,
-            length: dc.indexChunk.chunkLen,
-          });
+          continue;
         }
-        continue;
-      }
-      for (const dc of perGroupChunks[gi]!) {
-        for (let k = 0; k < dc.messages.length; k++) {
-          const m = dc.messages[k]!;
-          rangesB.push({
-            offset: dc.indexChunk.chunkOffset + m.offsetInChunk,
-            length: dc.messageLens[k]!,
-          });
+        for (const dc of perGroupChunks[gi]!) {
+          for (let k = 0; k < dc.messages.length; k++) {
+            const m = dc.messages[k]!;
+            rangesB.push({
+              offset: dc.indexChunk.chunkOffset + m.offsetInChunk,
+              length: dc.messageLens[k]!,
+            });
+          }
         }
       }
+      const plannedB = plan(rangesB, args.strategy);
+      const bufsB = await fetchAll(this.rs, plannedB.ops, args.strategy.maxConcurrency);
+      loadedData = new LoadedBytes(rangesB, plannedB.locations, bufsB);
     }
-    const plannedB = plan(rangesB, args.strategy);
-    const bufsB = await fetchAll(this.rs, plannedB.ops, args.strategy.maxConcurrency);
-    const loadedData = new LoadedBytes(rangesB, plannedB.locations, bufsB);
 
     // ---- Build per-group iterators.
     const iters: PreloadedTopicsGroupIterator[] = [];

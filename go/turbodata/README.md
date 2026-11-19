@@ -134,6 +134,33 @@ for {
 }
 ```
 
+### Scan timestamps
+
+`ReadIndex` returns one metadata entry per matching message, including duplicate
+timestamps. It accepts the same options as `ReadMessages`. Index chunks load on
+demand by default. `WithReadStrategy` prefetches the candidate chunks.
+
+`WithTailPrefetch` can fetch the footer and summary in one request. A large prefetch
+window can also cover payload bytes. `WithVideoDecodable` includes video entries back
+to the anchoring key frame, even when it precedes the requested start time.
+
+```go
+it, err := r.ReadIndex(turbodata.WithTopicNames([]string{"/imu"}))
+if err != nil {
+    log.Fatal(err)
+}
+for {
+    entry, err := it.Next()
+    if err == io.EOF {
+        break
+    }
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println(entry.Timestamp, entry.TopicName, entry.IsKeyFrame)
+}
+```
+
 ### Order, time, and topic filters
 
 `ReadMessages` takes options. Topics not listed are skipped; chunks fully

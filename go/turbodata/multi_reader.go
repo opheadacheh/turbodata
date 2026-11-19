@@ -83,7 +83,7 @@ func (m *MultiReader) ReadMessages(opts ...ReadOption) (*iter.MultiMessageIterat
 // iterator so the requested names are read before per-reader remap
 // translation rewrites them to in-file names.
 func readScopeTopics(opts []ReadOption, bounds []map[string]topicBound) []string {
-	probe := iter.NewMessageIterator(nil)
+	probe := iter.NewMessageIterator(nil, false)
 	for _, opt := range opts {
 		// Errors here also surface from the real per-reader ReadMessages; the
 		// probe only needs the resulting field values.

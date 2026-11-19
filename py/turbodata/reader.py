@@ -75,6 +75,15 @@ class Message:
         return f"Message(ts={self.timestamp}, topic={self.topic_name!r}, data={head!r}...)"
 
 
+@dataclass(frozen=True)
+class IndexEntry:
+    """Writer-recorded metadata for one message."""
+
+    timestamp: int
+    topic_name: str
+    is_key_frame: bool
+
+
 @dataclass
 class SampleQuery:
     """One sampling request: floor message at each timestamp for a topic."""
@@ -324,6 +333,44 @@ class Reader:
 
         Returns an iterator. Iteration runs lazily; pulling None ends it.
         """
+        entries = self._read_entries(
+            topic_names, start_timestamp, end_timestamp, order, strategy,
+            tail_prefetch=tail_prefetch, video_decodable=video_decodable, index_only=False,
+        )
+        return (
+            Message(ts, name, bytes(data) if copy else data, mark)
+            for ts, name, data, mark in entries
+        )
+
+    def read_index(
+        self,
+        *,
+        topic_names: Optional[List[str]] = None,
+        start_timestamp: int = 0,
+        end_timestamp: int = _MAX_I64,
+        order: Order = Order.TIME,
+        strategy: Optional[ReadStrategy] = None,
+        tail_prefetch: int = 0,
+        copy: bool = False,
+        video_decodable: bool = False,
+    ) -> Iterator[IndexEntry]:
+        """Yield per-message metadata from the index with the same options as read_messages.
+
+        tail_prefetch may include payload bytes in the summary read.
+        video_decodable includes index entries back to the anchoring key frame.
+        Index entries contain only immutable metadata, so copy has no effect.
+        """
+        entries = self._read_entries(
+            topic_names, start_timestamp, end_timestamp, order, strategy,
+            tail_prefetch=tail_prefetch, video_decodable=video_decodable, index_only=True,
+        )
+        return (IndexEntry(ts, name, mark) for ts, name, _, mark in entries)
+
+    def _read_entries(
+        self, topic_names: Optional[List[str]], start_timestamp: int, end_timestamp: int,
+        order: Order, strategy: Optional[ReadStrategy], *,
+        tail_prefetch: int, video_decodable: bool, index_only: bool,
+    ) -> Iterator[Tuple[int, str, bytes, bool]]:
         summary = self._summary_with_hint(tail_prefetch)
 
         # When a remap is configured, caller-supplied topic_names arrive in
@@ -352,15 +399,15 @@ class Reader:
         if strategy is not None:
             group_its = self._prepare_cost_aware(
                 summary, topic_ids, wanted, start_timestamp, end_timestamp, order,
-                strategy, video_decodable,
+                strategy, video_decodable, index_only,
             )
         else:
             group_its = self._prepare_default(
                 summary, topic_ids, wanted, start_timestamp, end_timestamp, order,
-                video_decodable,
+                video_decodable, index_only,
             )
 
-        return self._merge_groups(group_its, id_to_name, order, copy)
+        return self._merge_groups(group_its, id_to_name, order)
 
     # ---- merge ---------------------------------------------------------
     def _merge_groups(
@@ -368,8 +415,7 @@ class Reader:
         group_its,
         id_to_name: Dict[int, str],
         order: Order,
-        copy: bool,
-    ) -> Iterator[Message]:
+    ) -> Iterator[Tuple[int, str, bytes, bool]]:
         import heapq
 
         # Heap entries: (key, counter, group_idx, topic_id, data, mark). counter
@@ -391,8 +437,7 @@ class Reader:
         while heap:
             key, _, gi, tid, data, mark = heapq.heappop(heap)
             ts = -key if reverse else key
-            payload = bytes(data) if copy else data
-            yield Message(timestamp=ts, topic_name=id_to_name.get(tid, ""), data=payload, is_key_frame=mark)
+            yield ts, id_to_name[tid], data, mark
             nxt = group_its[gi].next()
             if nxt is not None:
                 nts, ntid, ndata, nmark = nxt
@@ -410,6 +455,7 @@ class Reader:
         end_ts: int,
         order: Order,
         video_decodable: bool = False,
+        index_only: bool = False,
     ) -> List[TopicsGroupIterator]:
         out: List[TopicsGroupIterator] = []
         for ti in summary.topics_infos:
@@ -423,6 +469,7 @@ class Reader:
                 end_timestamp=end_ts,
                 order=order,
                 video_decodable=video_decodable and _is_video_topics_info(ti),
+                index_only=index_only,
             )
             if git.has_any():
                 out.append(git)
@@ -439,6 +486,7 @@ class Reader:
         order: Order,
         strategy: ReadStrategy,
         video_decodable: bool = False,
+        index_only: bool = False,
     ) -> List[PreloadedTopicsGroupIterator]:
         fetcher = Fetcher(self._source, strategy.max_concurrency)
 
@@ -483,30 +531,33 @@ class Reader:
                     start_ts,
                     end_ts,
                     group_video,
+                    include_lengths=not index_only,
                 )
                 per_group_chunks[gi].append((ic, msgs, m_lens))
 
-        # Phase B: fetch data ranges. Chunk-level for compressed groups,
-        # per-message for uncompressed groups.
-        ranges_b: List[Range] = []
-        for gi, (_ti, is_compressed, _infos, _lens, _gv) in enumerate(scoped):
-            if is_compressed:
-                for ic, msgs, _m_lens in per_group_chunks[gi]:
-                    if not msgs:
-                        continue
-                    ranges_b.append(Range(offset=ic.chunk_offset, length=ic.chunk_len))
-                continue
-            for ic, msgs, m_lens in per_group_chunks[gi]:
-                for msg, ln in zip(msgs, m_lens):
-                    ranges_b.append(
-                        Range(
-                            offset=ic.chunk_offset + msg.message_index.offset_in_chunk,
-                            length=ln,
+        loaded_data = None
+        if not index_only:
+            # Phase B: fetch data ranges. Chunk-level for compressed groups,
+            # per-message for uncompressed groups.
+            ranges_b: List[Range] = []
+            for gi, (_ti, is_compressed, _infos, _lens, _gv) in enumerate(scoped):
+                if is_compressed:
+                    for ic, msgs, _m_lens in per_group_chunks[gi]:
+                        if not msgs:
+                            continue
+                        ranges_b.append(Range(offset=ic.chunk_offset, length=ic.chunk_len))
+                    continue
+                for ic, msgs, m_lens in per_group_chunks[gi]:
+                    for msg, ln in zip(msgs, m_lens):
+                        ranges_b.append(
+                            Range(
+                                offset=ic.chunk_offset + msg.message_index.offset_in_chunk,
+                                length=ln,
+                            )
                         )
-                    )
-        ops_b, locs_b = plan(ranges_b, strategy.coalesce_gap, strategy.split_threshold)
-        bufs_b = fetcher.execute(ops_b)
-        loaded_data = LoadedBytes(ranges_b, locs_b, bufs_b)
+            ops_b, locs_b = plan(ranges_b, strategy.coalesce_gap, strategy.split_threshold)
+            bufs_b = fetcher.execute(ops_b)
+            loaded_data = LoadedBytes(ranges_b, locs_b, bufs_b)
 
         # Build per-group preloaded iterators.
         out: List[PreloadedTopicsGroupIterator] = []

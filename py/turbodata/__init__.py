@@ -74,6 +74,7 @@ from .multi_reader import MultiReader
 from .reader import (
     DEFAULT_SAMPLE_STRATEGY,
     Frame,
+    IndexEntry,
     Message,
     Reader,
     SampleQuery,
@@ -98,6 +99,7 @@ __all__ = [
     "MultiReader",
     "Writer",
     "Message",
+    "IndexEntry",
     # Read sources
     "ReadSource",
     "FileReadSource",

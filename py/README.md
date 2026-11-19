@@ -111,6 +111,21 @@ for msg in reader.read_messages(copy=True):
     ...  # msg.data is independent of subsequent pulls
 ```
 
+### Scan timestamps
+
+`read_index` returns one metadata entry per matching message, including duplicate
+timestamps. It accepts the same options as `read_messages`. Index chunks load on
+demand by default. `strategy` prefetches the candidate chunks.
+
+`tail_prefetch` can fetch the footer and summary in one request. A large prefetch
+window can also cover payload bytes. `video_decodable` includes video entries back
+to the anchoring key frame, even when it precedes the requested start time.
+
+```python
+for entry in reader.read_index(topic_names=["/imu"]):
+    print(entry.timestamp, entry.topic_name, entry.is_key_frame)
+```
+
 ### Order, time, and topic filters
 
 Topics not listed are skipped; chunks fully outside the `[start, end]` window
