@@ -10,6 +10,10 @@ note the affected SDK(s) where relevant.
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.3.0] - 2026-11-19
+
 ### Added
 
 - Go, Python, and TypeScript readers can scan timestamps, topic names, and key
